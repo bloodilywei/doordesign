@@ -20,16 +20,8 @@
     <style>
         body { background-color: #f8fafc; font-family: -apple-system, sans-serif; overflow: hidden; touch-action: manipulation; }
         .canvas-bg { background-image: linear-gradient(45deg, #e5e7eb 25%, transparent 25%), linear-gradient(-45deg, #e5e7eb 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e5e7eb 75%), linear-gradient(-45deg, transparent 75%, #e5e7eb 75%); background-size: 20px 20px; }
-        
-        /* 抽屜選單動畫 */
         .drawer { transform: translateY(100%); transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1); padding-bottom: env(safe-area-inset-bottom); }
         .drawer.active { transform: translateY(0); }
-
-        /* 選項按鈕美化 */
-        .option-grid::-webkit-scrollbar { display: none; }
-        .active-ring { ring: 3px solid #3b82f6; ring-offset: 2px; }
-        
-        /* 底部導航加大 */
         .nav-btn { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 4px; transition: all 0.2s; }
         .nav-btn:active { transform: scale(0.9); background-color: #f1f5f9; }
     </style>
@@ -66,15 +58,15 @@
 
         const App = () => {
             const [isAuthorized, setIsAuthorized] = useState(false);
-            const [activeMenu, setActiveMenu] = useState(null); // 'designs', 'colors', 'acc'
+            const [activeMenu, setActiveMenu] = useState(null);
             const [selection, setSelection] = useState({ design: '01', file: '0111.jpg', lineColor: '' });
             const [availableFiles, setAvailableFiles] = useState(new Set());
             const [fabricCanvas, setFabricCanvas] = useState(null);
             const [selectedAcc, setSelectedAcc] = useState(null);
+            const [doorScale, setDoorScale] = useState(1); // ★ 重要：儲存目前門片的縮放值
             const [isSyncing, setIsSyncing] = useState(true);
             const [authKey, setAuthKey] = useState('');
 
-            // 1. 登入與掃描 (優化流量)
             const checkKey = async (key) => {
                 const targetKey = key || authKey;
                 if (!targetKey) return;
@@ -88,7 +80,7 @@
                         setIsAuthorized(true);
                         localStorage.setItem('cached_key', matched.key);
                         startSmartScan();
-                    } else alert("無效金鑰或已過期");
+                    } else alert("密碼錯誤或過期");
                 } catch (e) { alert("連線失敗"); }
             };
 
@@ -101,8 +93,6 @@
                     });
                     Object.keys(CONFIG.lineColors).forEach(lc => list.push({ f: 'lines', n: `${d}_${lc}.png` }));
                 });
-
-                // 分批掃描，每批 20 個，避免 GitHub 排斥
                 for (let i = 0; i < list.length; i += 20) {
                     const batch = list.slice(i, i + 20);
                     await Promise.all(batch.map(async (item) => {
@@ -122,44 +112,56 @@
                 if (saved) checkKey(saved);
             }, []);
 
-            // 2. 畫布邏輯
             useEffect(() => {
                 if (!isAuthorized) return;
                 const canvas = new fabric.Canvas('main-canvas', { 
                     width: window.innerWidth, 
-                    height: window.innerHeight - 80, // 底部 nav 預留
+                    height: window.innerHeight - 80, 
                     backgroundColor: 'transparent',
                     preserveObjectStacking: true 
                 });
-                
                 canvas.on('selection:created', (e) => setSelectedAcc(e.target.id.startsWith('acc') ? e.target : null));
                 canvas.on('selection:updated', (e) => setSelectedAcc(e.target.id.startsWith('acc') ? e.target : null));
                 canvas.on('selection:cleared', () => setSelectedAcc(null));
-                
                 setFabricCanvas(canvas);
                 return () => canvas.dispose();
             }, [isAuthorized]);
 
-            // 3. 圖片自動對齊與載入
+            // 門片與配件比例同步邏輯
             useEffect(() => {
                 if (!fabricCanvas || !selection.file) return;
                 fabric.Image.fromURL(`doors/${selection.file.replace('doors/','')}`, (doorImg) => {
                     if (!doorImg) return;
-                    const existing = fabricCanvas.getObjects().find(o => o.id === 'door');
-                    if (existing) fabricCanvas.remove(existing);
+                    const existingDoor = fabricCanvas.getObjects().find(o => o.id === 'door');
+                    if (existingDoor) fabricCanvas.remove(existingDoor);
 
-                    const scale = Math.min((window.innerWidth * 0.8) / doorImg.width, (window.innerHeight * 0.6) / doorImg.height);
-                    doorImg.set({ scaleX: scale, scaleY: scale, selectable: false, id: 'door', evented: false, originX: 'center', originY: 'center', left: window.innerWidth/2, top: (window.innerHeight - 150)/2 });
+                    // 1. 計算新的縮放比例
+                    const newScale = Math.min((window.innerWidth * 0.8) / doorImg.width, (window.innerHeight * 0.6) / doorImg.height);
+                    setDoorScale(newScale); // 儲存起來供配件使用
+
+                    doorImg.set({ scaleX: newScale, scaleY: newScale, selectable: false, id: 'door', evented: false, originX: 'center', originY: 'center', left: window.innerWidth/2, top: (window.innerHeight - 150)/2 });
                     fabricCanvas.add(doorImg).sendToBack(doorImg);
 
-                    // 同步線條層
+                    // 2. 同步所有已存在的配件比例
+                    fabricCanvas.getObjects().forEach(obj => {
+                        if (obj.id && obj.id.startsWith('acc')) {
+                            obj.set({ scaleX: newScale, scaleY: newScale });
+                            obj.setCoords(); // 更新點擊區域
+                        }
+                    });
+
+                    // 3. 同步線條層比例
                     const linePath = `lines/${selection.design}_${selection.lineColor}.png`;
                     const existingLine = fabricCanvas.getObjects().find(o => o.id === 'lineLayer');
                     if (existingLine) fabricCanvas.remove(existingLine);
 
                     if (selection.lineColor && availableFiles.has(linePath)) {
                         fabric.Image.fromURL(linePath, (lineImg) => {
-                            lineImg.set({ scaleX: (doorImg.getScaledWidth()) / lineImg.width, scaleY: (doorImg.getScaledHeight()) / lineImg.height, selectable: false, id: 'lineLayer', evented: false, originX: 'center', originY: 'center', left: doorImg.left, top: doorImg.top });
+                            lineImg.set({ 
+                                scaleX: (doorImg.getScaledWidth()) / lineImg.width, 
+                                scaleY: (doorImg.getScaledHeight()) / lineImg.height, 
+                                selectable: false, id: 'lineLayer', evented: false, originX: 'center', originY: 'center', left: doorImg.left, top: doorImg.top 
+                            });
                             fabricCanvas.add(lineImg);
                             lineImg.moveTo(1);
                             fabricCanvas.requestRenderAll();
@@ -183,53 +185,49 @@
                 return (
                     <div className="h-screen flex flex-col items-center justify-center bg-slate-900 px-10">
                         <div className="w-20 h-20 bg-blue-600 rounded-3xl mb-8 flex items-center justify-center text-white text-4xl font-black italic shadow-2xl">CY</div>
-                        <h2 className="text-white text-lg font-bold mb-8 tracking-widest">系統授權訪問</h2>
+                        <h2 className="text-white text-lg font-bold mb-8 tracking-widest uppercase">系統授權訪問</h2>
                         <input type="text" value={authKey} onChange={(e)=>setAuthKey(e.target.value)} placeholder="授權金鑰" className="w-full p-5 bg-slate-800 border border-slate-700 rounded-2xl text-center text-white mb-4 outline-none focus:border-blue-500 uppercase tracking-widest" />
-                        <button onClick={()=>checkKey()} className="w-full py-5 bg-blue-600 text-white rounded-2xl font-bold shadow-xl active:scale-95 transition-all">啟動模擬器</button>
+                        <button onClick={()=>checkKey()} className="w-full py-5 bg-blue-600 text-white rounded-2xl font-bold shadow-xl active:scale-95 transition-all">啟動系統</button>
                     </div>
                 );
             }
 
             return (
                 <div className="h-screen w-screen flex flex-col bg-slate-50 relative overflow-hidden font-sans">
-                    {/* 頂部標籤 */}
                     <div className="h-14 flex items-center justify-between px-6 bg-white border-b z-10 shrink-0">
                         <div className="flex flex-col">
-                            <span className="text-[10px] text-slate-400 font-black uppercase">Current Model</span>
-                            <span className="text-sm font-black text-slate-700">{selection.design} - {selection.lineColor || '原色'}</span>
+                            <span className="text-[10px] text-slate-400 font-black uppercase tracking-widest font-mono">Current Model</span>
+                            <span className="text-sm font-black text-slate-700">{selection.design} - {selection.lineColor || 'None'}</span>
                         </div>
                         <button onClick={() => {
                             const link = document.createElement('a');
-                            const fileName = `CY_${selection.design}_S${selection.file.slice(-6,-4)}_${selection.lineColor || 'None'}.png`;
+                            const fileName = `CY_${selection.design}_S${selection.file.slice(-6,-4)}_${selection.lineColor || 'Origin'}.png`;
                             link.download = fileName;
                             link.href = fabricCanvas.toDataURL({ format: 'png', multiplier: 2 });
                             link.click();
-                        }} className="bg-slate-900 text-white px-5 py-2 rounded-full text-[11px] font-black tracking-widest uppercase">輸出圖檔</button>
+                        }} className="bg-slate-900 text-white px-5 py-2 rounded-full text-[11px] font-black tracking-widest uppercase">保存圖檔</button>
                     </div>
 
-                    {/* 畫布 */}
                     <div className="flex-1 canvas-bg flex items-center justify-center relative shadow-inner">
                         <canvas id="main-canvas"></canvas>
-                        {isSyncing && <div className="absolute top-4 left-4 bg-white/80 px-3 py-1 rounded-full text-[9px] font-bold text-blue-500 shadow-sm flex items-center gap-2 border border-blue-50">同步中...</div>}
+                        {isSyncing && <div className="absolute top-4 left-4 bg-white/90 px-4 py-1.5 rounded-full text-[10px] font-black text-blue-500 shadow-sm border border-blue-50">雲端同步中...</div>}
                     </div>
 
-                    {/* 底部導航欄 - 加大版 */}
                     <div className="h-24 bg-white border-t flex items-center justify-around px-4 z-30 shadow-[0_-5px_20px_rgba(0,0,0,0.05)] pb-6">
                         <button onClick={()=>setActiveMenu('designs')} className={`nav-btn ${activeMenu==='designs'?'text-blue-600':'text-slate-400'}`}>
-                            <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-lg">🔲</div><span className="text-[10px] font-black">選造型</span>
+                            <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-lg">🔲</div><span className="text-[10px] font-black uppercase">型號</span>
                         </button>
                         <button onClick={()=>setActiveMenu('colors')} className={`nav-btn ${activeMenu==='colors'?'text-blue-600':'text-slate-400'}`}>
-                            <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-lg">🎨</div><span className="text-[10px] font-black">選板材</span>
+                            <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-lg">🎨</div><span className="text-[10px] font-black uppercase">材質</span>
                         </button>
                         <button onClick={()=>setActiveMenu('acc')} className={`nav-btn ${activeMenu==='acc'?'text-blue-600':'text-slate-400'}`}>
-                            <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-lg">⚙️</div><span className="text-[10px] font-black">加配件</span>
+                            <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-lg">⚙️</div><span className="text-[10px] font-black uppercase">配件</span>
                         </button>
                     </div>
 
-                    {/* 彈出選單內容 (Drawer) */}
                     <div className={`drawer fixed bottom-0 left-0 w-full max-h-[70vh] bg-white rounded-t-[40px] shadow-[0_-20px_50px_rgba(0,0,0,0.15)] p-6 z-40 overflow-y-auto ${activeMenu?'active':''}`}>
-                        <div className="flex justify-between items-center mb-6">
-                            <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest">{activeMenu === 'designs' ? '選擇造型' : activeMenu === 'colors' ? '板材與線條' : '配件與飾面'}</h3>
+                        <div className="flex justify-between items-center mb-6 sticky top-0 bg-white pb-2">
+                            <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest">{activeMenu === 'designs' ? '選擇造型' : activeMenu === 'colors' ? '板材與線條' : '配件飾面'}</h3>
                             <button onClick={()=>setActiveMenu(null)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center font-bold">×</button>
                         </div>
                         
@@ -240,7 +238,7 @@
                                         const best = Array.from(availableFiles).find(f=>f.startsWith('doors/')&&f.includes(id)&&!f.includes('-'))||`${id}11.jpg`;
                                         setSelection({...selection, design:id, file:best});
                                         setActiveMenu(null);
-                                    }} className={`p-4 border-2 rounded-2xl text-xs font-black transition-all ${selection.design===id?'border-blue-500 bg-blue-50 text-blue-600':'border-slate-50 bg-slate-50'}`}>{id}</button>
+                                    }} className={`p-4 border-2 rounded-2xl text-xs font-black transition-all ${selection.design===id?'border-blue-500 bg-blue-50 text-blue-600 shadow-md':'border-slate-50 bg-slate-50'}`}>{id}</button>
                                 ))}
                             </div>
                         )}
@@ -250,12 +248,12 @@
                                 <div>
                                     <p className="text-[10px] font-black text-slate-300 mb-3 uppercase tracking-widest">線條顏色</p>
                                     <div className="grid grid-cols-4 gap-2">
-                                        <button onClick={()=>{setSelection({...selection, lineColor:''}); setActiveMenu(null);}} className={`p-2 border-2 rounded-xl text-[10px] font-bold ${selection.lineColor===''?'border-blue-500 bg-blue-50':'border-slate-50'}`}>原木紋</button>
+                                        <button onClick={()=>{setSelection({...selection, lineColor:''}); setActiveMenu(null);}} className={`p-2 border-2 rounded-xl text-[10px] font-black ${selection.lineColor===''?'border-blue-500 bg-blue-50':'border-slate-50'}`}>原樣</button>
                                         {Object.entries(CONFIG.lineColors).map(([lc, d]) => {
                                             if (!availableFiles.has(`lines/${selection.design}_${lc}.png`)) return null;
                                             return (
-                                                <button key={lc} onClick={()=>{setSelection({...selection, lineColor:lc}); setActiveMenu(null);}} className={`p-2 border-2 rounded-xl flex flex-col items-center gap-1 ${selection.lineColor===lc?'border-blue-500 bg-blue-50':'border-slate-50'}`}>
-                                                    <div className="w-full h-3 rounded-full" style={{backgroundColor: d.hex}}></div><span className="text-[9px]">{d.name}</span>
+                                                <button key={lc} onClick={()=>{setSelection({...selection, lineColor:lc}); setActiveMenu(null);}} className={`p-2 border-2 rounded-xl flex flex-col items-center gap-1 ${selection.lineColor===lc?'border-blue-500 bg-blue-50 shadow-sm':'border-slate-50'}`}>
+                                                    <div className="w-full h-3 rounded-full" style={{backgroundColor: d.hex}}></div><span className="text-[9px] font-bold">{d.name}</span>
                                                 </button>
                                             );
                                         })}
@@ -270,8 +268,8 @@
                                                 if (!availableFiles.has(fk)) return null;
                                                 return (
                                                     <button key={cId} onClick={()=>{setSelection({...selection, file:fk}); setActiveMenu(null);}} className="flex flex-col items-center gap-2">
-                                                        <div className={`w-full aspect-square rounded-2xl border-2 transition-all ${selection.file===fk?'border-blue-500 shadow-md scale-105':'border-slate-100'}`} style={{backgroundColor: c.hex}}></div>
-                                                        <span className="text-[10px] font-bold text-slate-500 truncate w-full text-center">{c.name}</span>
+                                                        <div className={`w-full aspect-square rounded-2xl border-2 transition-all ${selection.file===fk?'border-blue-500 shadow-md scale-105':'border-slate-100 shadow-inner'}`} style={{backgroundColor: c.hex}}></div>
+                                                        <span className="text-[10px] font-black text-slate-500 truncate w-full text-center leading-tight">{c.name}</span>
                                                     </button>
                                                 );
                                             })}
@@ -285,37 +283,40 @@
                             <div className="flex flex-col gap-6">
                                 {!selectedAcc ? (
                                     <>
-                                        <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">新增至畫布</p>
+                                        <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">點擊新增至門片</p>
                                         <div className="grid grid-cols-1 gap-2">
                                             {CONFIG.glassFrames.concat(CONFIG.louvers).map(acc => (
                                                 <button key={acc.id} onClick={()=>{
                                                     fabric.Image.fromURL(`accessories/${acc.id}_白.png`, (img)=>{
-                                                        img.set({ left: window.innerWidth/2, top: 200, originX: 'center', originY: 'center', id: `acc-${Date.now()}`, baseId: acc.id, currentColor: "白", scaleX: 0.5, scaleY: 0.5, hasControls: false, hasBorders: true, cornerColor: '#3b82f6' });
+                                                        // ★ 修正：新增配件時直接繼承 doorScale
+                                                        img.set({ left: window.innerWidth/2, top: (window.innerHeight - 150)/2, originX: 'center', originY: 'center', id: `acc-${Date.now()}`, baseId: acc.id, currentColor: "白", scaleX: doorScale, scaleY: doorScale, hasControls: true, hasBorders: true, cornerColor: '#3b82f6', cornerSize: 20 });
                                                         fabricCanvas.add(img).setActiveObject(img).renderAll();
                                                     });
-                                                }} className="p-4 bg-slate-50 rounded-2xl border-2 border-slate-100 text-left flex items-center gap-4">
-                                                    <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center shadow-sm">＋</div>
+                                                }} className="p-4 bg-slate-50 rounded-3xl border-2 border-slate-100 text-left flex items-center gap-4 active:bg-blue-50">
+                                                    <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm text-blue-500 font-black">+</div>
                                                     <span className="text-xs font-black text-slate-600">{acc.name}</span>
                                                 </button>
                                             ))}
                                         </div>
                                     </>
                                 ) : (
-                                    <div className="animate-in fade-in slide-in-from-bottom-4">
-                                        <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 mb-6 flex justify-between items-center">
-                                            <span className="text-xs font-black text-blue-700 italic truncate">正在調整：{selectedAcc.baseId}</span>
-                                            <button onClick={()=>{fabricCanvas.remove(selectedAcc); fabricCanvas.renderAll(); setSelectedAcc(null);}} className="text-xs font-bold text-rose-500 underline">移除</button>
+                                    <div className="animate-in slide-in-from-bottom-8">
+                                        <div className="bg-emerald-50 p-5 rounded-3xl border border-emerald-100 mb-6 flex justify-between items-center">
+                                            <div className="flex flex-col"><span className="text-[9px] font-black text-emerald-400 uppercase">Selected Accessory</span><span className="text-xs font-black text-emerald-700 truncate">{selectedAcc.baseId}</span></div>
+                                            <button onClick={()=>{fabricCanvas.remove(selectedAcc); fabricCanvas.renderAll(); setSelectedAcc(null);}} className="bg-rose-500 text-white px-4 py-2 rounded-xl text-[10px] font-black shadow-lg">移除配件</button>
                                         </div>
+                                        <p className="text-[10px] font-black text-slate-300 mb-3 uppercase">變更配件飾面顏色</p>
                                         <div className="grid grid-cols-3 gap-3">
                                             {CONFIG.accColors.map(c => (
                                                 <button key={c.id} onClick={()=>{
                                                     fabric.Image.fromURL(`accessories/${selectedAcc.baseId}_${c.id}.png`, (newImg)=>{
-                                                        newImg.set({ left: selectedAcc.left, top: selectedAcc.top, scaleX: selectedAcc.scaleX, scaleY: selectedAcc.scaleY, id: selectedAcc.id, baseId: selectedAcc.baseId, currentColor: c.id, hasControls: false, cornerColor: '#3b82f6' });
+                                                        // ★ 修正：切換顏色時也要維持目前的 doorScale
+                                                        newImg.set({ left: selectedAcc.left, top: selectedAcc.top, scaleX: doorScale, scaleY: doorScale, id: selectedAcc.id, baseId: selectedAcc.baseId, currentColor: c.id, hasControls: true, cornerColor: '#3b82f6', cornerSize: 20 });
                                                         fabricCanvas.remove(selectedAcc).add(newImg).setActiveObject(newImg).renderAll();
                                                         setSelectedAcc(newImg);
                                                     });
-                                                }} className={`p-4 border-2 rounded-2xl flex flex-col items-center gap-2 ${selectedAcc.currentColor===c.id?'border-blue-500 bg-blue-50':'border-slate-50'}`}>
-                                                    <div className="w-8 h-8 rounded shadow-sm border border-white" style={{backgroundColor: c.hex}}></div><span className="text-[10px] font-bold">{c.name}</span>
+                                                }} className={`p-4 border-2 rounded-3xl flex flex-col items-center gap-2 ${selectedAcc.currentColor===c.id?'border-emerald-500 bg-emerald-50 shadow-md':'border-slate-50 bg-white'}`}>
+                                                    <div className="w-8 h-8 rounded-full shadow-inner border-2 border-white" style={{backgroundColor: c.hex}}></div><span className="text-[10px] font-black text-slate-600">{c.name}</span>
                                                 </button>
                                             ))}
                                         </div>
@@ -325,7 +326,6 @@
                         )}
                     </div>
 
-                    {/* 遮罩 */}
                     {activeMenu && <div onClick={()=>setActiveMenu(null)} className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-20"></div>}
                 </div>
             );
