@@ -2,8 +2,8 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>門片模擬系統 - 手機優化版</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>門片模擬系統 - 專業版</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -18,16 +18,20 @@
     </script>
 
     <style>
-        body { background-color: #f1f5f9; font-family: -apple-system, sans-serif; overflow: hidden; touch-action: none; }
-        .canvas-bg { background-image: linear-gradient(45deg, #e5e7eb 25%, transparent 25%), linear-gradient(-45deg, #e5e7eb 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e5e7eb 75%), linear-gradient(-45deg, transparent 75%, #e5e7eb 75%); background-size: 15px 15px; }
-        .custom-scrollbar::-webkit-scrollbar { display: none; }
+        body { background-color: #f8fafc; font-family: -apple-system, sans-serif; overflow: hidden; touch-action: manipulation; }
+        .canvas-bg { background-image: linear-gradient(45deg, #e5e7eb 25%, transparent 25%), linear-gradient(-45deg, #e5e7eb 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e5e7eb 75%), linear-gradient(-45deg, transparent 75%, #e5e7eb 75%); background-size: 20px 20px; }
         
-        /* 手機底部選單動畫 */
-        .drawer { transform: translateY(100%); transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        /* 抽屜選單動畫 */
+        .drawer { transform: translateY(100%); transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1); padding-bottom: env(safe-area-inset-bottom); }
         .drawer.active { transform: translateY(0); }
 
-        /* 防止手機點擊時的藍色高亮 */
-        * { -webkit-tap-highlight-color: transparent; }
+        /* 選項按鈕美化 */
+        .option-grid::-webkit-scrollbar { display: none; }
+        .active-ring { ring: 3px solid #3b82f6; ring-offset: 2px; }
+        
+        /* 底部導航加大 */
+        .nav-btn { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 4px; transition: all 0.2s; }
+        .nav-btn:active { transform: scale(0.9); background-color: #f1f5f9; }
     </style>
 </head>
 <body>
@@ -53,20 +57,24 @@
                 "6": { name: "淺黃梧桐", hex: "#F5DEB3" }, "7": { name: "黃梧桐", hex: "#E2B37B" },
                 "8": { name: "摩卡", hex: "#4B3621" }, "9": { name: "灰橡", hex: "#8E8E8E" }
             },
-            lineColors: { "G": { name: "灰線", hex: "#9ca3af" }, "B": { name: "黑線", hex: "#000000" } },
-            // 直接指定型號清單，避免掃描幾百次造成的流量卡死
-            designs: ["110", "120", "122", "123", "125", "126", "141", "144", "150", "306", "790", "802", "01", "02", "04", "11"]
+            lineColors: { "G": { name: "灰線", hex: "#9ca3af" }, "B": { name: "黑線", hex: "#000000" }, "W": { name: "白線", hex: "#ffffff" } },
+            glassFrames: [ { id: "GLS_G-01_467×725", name: "玻璃框 G-01" }, { id: "GLS_T_08_200×605", name: "玻璃框 T-08" }, { id: "GLS_T_09_370×605", name: "玻璃框 T-09" } ],
+            louvers: [ { id: "LOU_A-03_378×230", name: "百頁 A-03" }, { id: "LOU_A-04_200×650", name: "百頁 A-04" } ],
+            accColors: [ { id: "白", name: "白色", hex: "#FFFFFF" }, { id: "柚木", name: "柚木色", hex: "#966F33" }, { id: "胡桃", name: "胡桃色", hex: "#5D4037" } ],
+            potentialDesigns: ["110", "120", "122", "123", "125", "126", "141", "144", "150", "151", "152", "153", "305", "306", "307", "308", "309", "401", "501", "502", "503", "504", "601", "602", "605", "650", "651", "751", "752", "755", "760", "761", "762", "763", "764", "765", "780", "790", "791", "802", "880", "900", "01", "02", "04", "07", "08", "11", "14", "15", "16", "20", "30", "50", "51", "54", "58", "60", "61", "62", "63", "64", "65", "75", "76", "78", "79", "80", "87", "88", "90", "95", "100", "200", "201"]
         };
 
         const App = () => {
             const [isAuthorized, setIsAuthorized] = useState(false);
             const [activeMenu, setActiveMenu] = useState(null); // 'designs', 'colors', 'acc'
             const [selection, setSelection] = useState({ design: '01', file: '0111.jpg', lineColor: '' });
+            const [availableFiles, setAvailableFiles] = useState(new Set());
             const [fabricCanvas, setFabricCanvas] = useState(null);
+            const [selectedAcc, setSelectedAcc] = useState(null);
+            const [isSyncing, setIsSyncing] = useState(true);
             const [authKey, setAuthKey] = useState('');
-            const [isSyncing, setIsSyncing] = useState(false);
 
-            // 1. 權限檢查 (輕量化)
+            // 1. 登入與掃描 (優化流量)
             const checkKey = async (key) => {
                 const targetKey = key || authKey;
                 if (!targetKey) return;
@@ -79,8 +87,34 @@
                     if (matched && new Date(matched.expiresAt) > new Date()) {
                         setIsAuthorized(true);
                         localStorage.setItem('cached_key', matched.key);
-                    } else alert("密碼錯誤或已過期");
+                        startSmartScan();
+                    } else alert("無效金鑰或已過期");
                 } catch (e) { alert("連線失敗"); }
+            };
+
+            const startSmartScan = async () => {
+                const found = new Set();
+                const list = [];
+                CONFIG.potentialDesigns.forEach(d => {
+                    Object.keys(CONFIG.series).forEach(t => {
+                        Object.keys(CONFIG.colors).forEach(c => list.push({ f: 'doors', n: `${d}${t}${c}.jpg` }));
+                    });
+                    Object.keys(CONFIG.lineColors).forEach(lc => list.push({ f: 'lines', n: `${d}_${lc}.png` }));
+                });
+
+                // 分批掃描，每批 20 個，避免 GitHub 排斥
+                for (let i = 0; i < list.length; i += 20) {
+                    const batch = list.slice(i, i + 20);
+                    await Promise.all(batch.map(async (item) => {
+                        try {
+                            const res = await fetch(`${item.f}/${item.n}`, { method: 'HEAD' });
+                            if (res.ok) found.add(`${item.f}/${item.n}`);
+                        } catch (e) {}
+                    }));
+                    if (i % 100 === 0) setAvailableFiles(new Set(found));
+                }
+                setAvailableFiles(new Set(found));
+                setIsSyncing(false);
             };
 
             useEffect(() => {
@@ -88,142 +122,211 @@
                 if (saved) checkKey(saved);
             }, []);
 
-            // 2. 畫布初始化 (自動符合螢幕)
+            // 2. 畫布邏輯
             useEffect(() => {
                 if (!isAuthorized) return;
                 const canvas = new fabric.Canvas('main-canvas', { 
                     width: window.innerWidth, 
-                    height: window.innerHeight - 120, // 扣除底部選單
+                    height: window.innerHeight - 80, // 底部 nav 預留
                     backgroundColor: 'transparent',
                     preserveObjectStacking: true 
                 });
+                
+                canvas.on('selection:created', (e) => setSelectedAcc(e.target.id.startsWith('acc') ? e.target : null));
+                canvas.on('selection:updated', (e) => setSelectedAcc(e.target.id.startsWith('acc') ? e.target : null));
+                canvas.on('selection:cleared', () => setSelectedAcc(null));
+                
                 setFabricCanvas(canvas);
                 return () => canvas.dispose();
             }, [isAuthorized]);
 
-            // 3. 圖片載入 (直接顯示，不預掃描)
+            // 3. 圖片自動對齊與載入
             useEffect(() => {
                 if (!fabricCanvas || !selection.file) return;
-                const pureFile = selection.file.replace('doors/', '');
-                fabric.Image.fromURL(`doors/${pureFile}`, (doorImg) => {
+                fabric.Image.fromURL(`doors/${selection.file.replace('doors/','')}`, (doorImg) => {
                     if (!doorImg) return;
                     const existing = fabricCanvas.getObjects().find(o => o.id === 'door');
                     if (existing) fabricCanvas.remove(existing);
 
-                    // 手機版自動縮放：以寬度 85% 或高度 75% 為準
-                    const scale = Math.min((window.innerWidth * 0.85) / doorImg.width, (window.innerHeight * 0.7) / doorImg.height);
+                    const scale = Math.min((window.innerWidth * 0.8) / doorImg.width, (window.innerHeight * 0.6) / doorImg.height);
                     doorImg.set({ scaleX: scale, scaleY: scale, selectable: false, id: 'door', evented: false, originX: 'center', originY: 'center', left: window.innerWidth/2, top: (window.innerHeight - 150)/2 });
                     fabricCanvas.add(doorImg).sendToBack(doorImg);
 
-                    // 線條層同步
+                    // 同步線條層
                     const linePath = `lines/${selection.design}_${selection.lineColor}.png`;
                     const existingLine = fabricCanvas.getObjects().find(o => o.id === 'lineLayer');
                     if (existingLine) fabricCanvas.remove(existingLine);
 
-                    if (selection.lineColor) {
+                    if (selection.lineColor && availableFiles.has(linePath)) {
                         fabric.Image.fromURL(linePath, (lineImg) => {
-                            if (lineImg) {
-                                lineImg.set({ scaleX: (doorImg.getScaledWidth()) / lineImg.width, scaleY: (doorImg.getScaledHeight()) / lineImg.height, selectable: false, id: 'lineLayer', evented: false, originX: 'center', originY: 'center', left: doorImg.left, top: doorImg.top });
-                                fabricCanvas.add(lineImg);
-                                lineImg.moveTo(1);
-                            }
+                            lineImg.set({ scaleX: (doorImg.getScaledWidth()) / lineImg.width, scaleY: (doorImg.getScaledHeight()) / lineImg.height, selectable: false, id: 'lineLayer', evented: false, originX: 'center', originY: 'center', left: doorImg.left, top: doorImg.top });
+                            fabricCanvas.add(lineImg);
+                            lineImg.moveTo(1);
                             fabricCanvas.requestRenderAll();
                         });
                     }
                     fabricCanvas.requestRenderAll();
+                }, { crossOrigin: 'anonymous' });
+            }, [selection, fabricCanvas, availableFiles]);
+
+            const allDetectedDesigns = useMemo(() => {
+                const ds = new Set();
+                availableFiles.forEach(p => {
+                    const f = p.split('/').pop();
+                    const d = CONFIG.potentialDesigns.find(id => f.startsWith(id));
+                    if (d) ds.add(d);
                 });
-            }, [selection, fabricCanvas]);
+                return Array.from(ds).sort((a,b) => a.localeCompare(b, undefined, {numeric: true}));
+            }, [availableFiles]);
 
             if (!isAuthorized) {
                 return (
-                    <div className="h-screen flex flex-col items-center justify-center bg-slate-900 px-10 text-center">
-                        <div className="w-20 h-20 bg-blue-600 rounded-3xl mb-8 flex items-center justify-center text-white text-4xl font-black italic">CY</div>
-                        <h2 className="text-white text-xl font-bold mb-6 tracking-widest uppercase">彩燿專業門片模擬</h2>
-                        <input type="text" value={authKey} onChange={(e)=>setAuthKey(e.target.value)} placeholder="請輸入金鑰" className="w-full p-4 bg-slate-800 border border-slate-700 rounded-2xl text-center text-white mb-4 outline-none focus:border-blue-500 transition-all" />
-                        <button onClick={()=>checkKey()} className="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold shadow-xl active:scale-95 transition-all">啟動系統</button>
+                    <div className="h-screen flex flex-col items-center justify-center bg-slate-900 px-10">
+                        <div className="w-20 h-20 bg-blue-600 rounded-3xl mb-8 flex items-center justify-center text-white text-4xl font-black italic shadow-2xl">CY</div>
+                        <h2 className="text-white text-lg font-bold mb-8 tracking-widest">系統授權訪問</h2>
+                        <input type="text" value={authKey} onChange={(e)=>setAuthKey(e.target.value)} placeholder="授權金鑰" className="w-full p-5 bg-slate-800 border border-slate-700 rounded-2xl text-center text-white mb-4 outline-none focus:border-blue-500 uppercase tracking-widest" />
+                        <button onClick={()=>checkKey()} className="w-full py-5 bg-blue-600 text-white rounded-2xl font-bold shadow-xl active:scale-95 transition-all">啟動模擬器</button>
                     </div>
                 );
             }
 
             return (
-                <div className="h-screen w-screen flex flex-col bg-slate-50 relative overflow-hidden">
-                    {/* 頂部資訊 */}
-                    <div className="h-12 flex items-center justify-between px-4 bg-white/80 backdrop-blur-md border-b text-[11px] font-bold text-slate-400 z-10">
-                        <span>型號: {selection.design}</span>
+                <div className="h-screen w-screen flex flex-col bg-slate-50 relative overflow-hidden font-sans">
+                    {/* 頂部標籤 */}
+                    <div className="h-14 flex items-center justify-between px-6 bg-white border-b z-10 shrink-0">
+                        <div className="flex flex-col">
+                            <span className="text-[10px] text-slate-400 font-black uppercase">Current Model</span>
+                            <span className="text-sm font-black text-slate-700">{selection.design} - {selection.lineColor || '原色'}</span>
+                        </div>
                         <button onClick={() => {
                             const link = document.createElement('a');
-                            link.download = `Door.png`;
+                            const fileName = `CY_${selection.design}_S${selection.file.slice(-6,-4)}_${selection.lineColor || 'None'}.png`;
+                            link.download = fileName;
                             link.href = fabricCanvas.toDataURL({ format: 'png', multiplier: 2 });
                             link.click();
-                        }} className="text-blue-600">保存圖片</button>
+                        }} className="bg-slate-900 text-white px-5 py-2 rounded-full text-[11px] font-black tracking-widest uppercase">輸出圖檔</button>
                     </div>
 
-                    {/* 主體畫布 */}
-                    <div className="flex-1 canvas-bg flex items-center justify-center relative">
+                    {/* 畫布 */}
+                    <div className="flex-1 canvas-bg flex items-center justify-center relative shadow-inner">
                         <canvas id="main-canvas"></canvas>
+                        {isSyncing && <div className="absolute top-4 left-4 bg-white/80 px-3 py-1 rounded-full text-[9px] font-bold text-blue-500 shadow-sm flex items-center gap-2 border border-blue-50">同步中...</div>}
                     </div>
 
-                    {/* 底部導航欄 */}
-                    <div className="h-20 bg-white border-t flex items-center justify-around px-2 z-30">
-                        <button onClick={()=>setActiveMenu(activeMenu==='designs'?null:'designs')} className={`flex flex-col items-center gap-1 ${activeMenu==='designs'?'text-blue-600':'text-slate-400'}`}>
-                            <div className="w-6 h-6 border-2 border-current rounded-sm"></div><span className="text-[10px] font-bold">選造型</span>
+                    {/* 底部導航欄 - 加大版 */}
+                    <div className="h-24 bg-white border-t flex items-center justify-around px-4 z-30 shadow-[0_-5px_20px_rgba(0,0,0,0.05)] pb-6">
+                        <button onClick={()=>setActiveMenu('designs')} className={`nav-btn ${activeMenu==='designs'?'text-blue-600':'text-slate-400'}`}>
+                            <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-lg">🔲</div><span className="text-[10px] font-black">選造型</span>
                         </button>
-                        <button onClick={()=>setActiveMenu(activeMenu==='colors'?null:'colors')} className={`flex flex-col items-center gap-1 ${activeMenu==='colors'?'text-blue-600':'text-slate-400'}`}>
-                            <div className="w-6 h-6 bg-current rounded-full"></div><span className="text-[10px] font-bold">選板材</span>
+                        <button onClick={()=>setActiveMenu('colors')} className={`nav-btn ${activeMenu==='colors'?'text-blue-600':'text-slate-400'}`}>
+                            <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-lg">🎨</div><span className="text-[10px] font-black">選板材</span>
                         </button>
-                        <button onClick={()=>setActiveMenu(activeMenu==='lines'?null:'lines')} className={`flex flex-col items-center gap-1 ${activeMenu==='lines'?'text-blue-600':'text-slate-400'}`}>
-                            <div className="w-6 h-6 border-b-2 border-r-2 border-current"></div><span className="text-[10px] font-bold">選線條</span>
-                        </button>
-                        <button onClick={()=>{localStorage.clear(); window.location.reload();}} className="flex flex-col items-center gap-1 text-slate-300">
-                            <div className="text-lg">×</div><span className="text-[10px]">登出</span>
+                        <button onClick={()=>setActiveMenu('acc')} className={`nav-btn ${activeMenu==='acc'?'text-blue-600':'text-slate-400'}`}>
+                            <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-lg">⚙️</div><span className="text-[10px] font-black">加配件</span>
                         </button>
                     </div>
 
                     {/* 彈出選單內容 (Drawer) */}
-                    <div className={`drawer fixed bottom-20 left-0 w-full max-h-[50vh] bg-white rounded-t-3xl shadow-[0_-10px_40px_rgba(0,0,0,0.1)] p-5 z-40 overflow-y-auto custom-scrollbar ${activeMenu?'active':''}`}>
-                        <div className="w-12 h-1 bg-slate-200 rounded-full mx-auto mb-4"></div>
+                    <div className={`drawer fixed bottom-0 left-0 w-full max-h-[70vh] bg-white rounded-t-[40px] shadow-[0_-20px_50px_rgba(0,0,0,0.15)] p-6 z-40 overflow-y-auto ${activeMenu?'active':''}`}>
+                        <div className="flex justify-between items-center mb-6">
+                            <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest">{activeMenu === 'designs' ? '選擇造型' : activeMenu === 'colors' ? '板材與線條' : '配件與飾面'}</h3>
+                            <button onClick={()=>setActiveMenu(null)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center font-bold">×</button>
+                        </div>
                         
                         {activeMenu === 'designs' && (
                             <div className="grid grid-cols-3 gap-3">
-                                {CONFIG.designs.map(id => (
-                                    <button key={id} onClick={()=>{setSelection({...selection, design:id, file:`${id}11.jpg`}); setActiveMenu(null);}} 
-                                        className={`p-3 border-2 rounded-xl text-xs font-bold ${selection.design===id?'border-blue-500 bg-blue-50 text-blue-600':'border-slate-50'}`}>造型 {id}</button>
+                                {allDetectedDesigns.map(id => (
+                                    <button key={id} onClick={()=>{
+                                        const best = Array.from(availableFiles).find(f=>f.startsWith('doors/')&&f.includes(id)&&!f.includes('-'))||`${id}11.jpg`;
+                                        setSelection({...selection, design:id, file:best});
+                                        setActiveMenu(null);
+                                    }} className={`p-4 border-2 rounded-2xl text-xs font-black transition-all ${selection.design===id?'border-blue-500 bg-blue-50 text-blue-600':'border-slate-50 bg-slate-50'}`}>{id}</button>
                                 ))}
                             </div>
                         )}
 
                         {activeMenu === 'colors' && (
-                            <div className="flex flex-col gap-6">
+                            <div className="flex flex-col gap-8">
+                                <div>
+                                    <p className="text-[10px] font-black text-slate-300 mb-3 uppercase tracking-widest">線條顏色</p>
+                                    <div className="grid grid-cols-4 gap-2">
+                                        <button onClick={()=>{setSelection({...selection, lineColor:''}); setActiveMenu(null);}} className={`p-2 border-2 rounded-xl text-[10px] font-bold ${selection.lineColor===''?'border-blue-500 bg-blue-50':'border-slate-50'}`}>原木紋</button>
+                                        {Object.entries(CONFIG.lineColors).map(([lc, d]) => {
+                                            if (!availableFiles.has(`lines/${selection.design}_${lc}.png`)) return null;
+                                            return (
+                                                <button key={lc} onClick={()=>{setSelection({...selection, lineColor:lc}); setActiveMenu(null);}} className={`p-2 border-2 rounded-xl flex flex-col items-center gap-1 ${selection.lineColor===lc?'border-blue-500 bg-blue-50':'border-slate-50'}`}>
+                                                    <div className="w-full h-3 rounded-full" style={{backgroundColor: d.hex}}></div><span className="text-[9px]">{d.name}</span>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
                                 {Object.entries(CONFIG.series).map(([tId, tName]) => (
                                     <div key={tId}>
-                                        <p className="text-[10px] font-bold text-slate-400 mb-2 uppercase tracking-widest">{tName}</p>
-                                        <div className="grid grid-cols-4 gap-2">
-                                            {Object.entries(CONFIG.colors).map(([cId, c]) => (
-                                                <button key={cId} onClick={()=>{setSelection({...selection, file:`${selection.design}${tId}${cId}.jpg`}); setActiveMenu(null);}} className="flex flex-col items-center gap-1">
-                                                    <div className="w-full aspect-square rounded-lg border shadow-sm" style={{backgroundColor: c.hex}}></div>
-                                                    <span className="text-[9px] text-slate-500 truncate w-full text-center">{c.name}</span>
-                                                </button>
-                                            ))}
+                                        <p className="text-[10px] font-black text-slate-300 mb-3 uppercase tracking-widest">{tName}</p>
+                                        <div className="grid grid-cols-4 gap-3">
+                                            {Object.entries(CONFIG.colors).map(([cId, c]) => {
+                                                const fk = `doors/${selection.design}${tId}${cId}.jpg`;
+                                                if (!availableFiles.has(fk)) return null;
+                                                return (
+                                                    <button key={cId} onClick={()=>{setSelection({...selection, file:fk}); setActiveMenu(null);}} className="flex flex-col items-center gap-2">
+                                                        <div className={`w-full aspect-square rounded-2xl border-2 transition-all ${selection.file===fk?'border-blue-500 shadow-md scale-105':'border-slate-100'}`} style={{backgroundColor: c.hex}}></div>
+                                                        <span className="text-[10px] font-bold text-slate-500 truncate w-full text-center">{c.name}</span>
+                                                    </button>
+                                                );
+                                            })}
                                         </div>
                                     </div>
                                 ))}
                             </div>
                         )}
 
-                        {activeMenu === 'lines' && (
-                            <div className="grid grid-cols-3 gap-3">
-                                <button onClick={()=>{setSelection({...selection, lineColor:''}); setActiveMenu(null);}} className="p-4 border-2 rounded-xl text-xs font-bold border-slate-50">無線條</button>
-                                {Object.entries(CONFIG.lineColors).map(([lc, d]) => (
-                                    <button key={lc} onClick={()=>{setSelection({...selection, lineColor:lc}); setActiveMenu(null);}} className="p-4 border-2 rounded-xl text-xs font-bold border-slate-50">
-                                        <div className="w-full h-1 mb-2" style={{backgroundColor: d.hex}}></div>{d.name}
-                                    </button>
-                                ))}
+                        {activeMenu === 'acc' && (
+                            <div className="flex flex-col gap-6">
+                                {!selectedAcc ? (
+                                    <>
+                                        <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">新增至畫布</p>
+                                        <div className="grid grid-cols-1 gap-2">
+                                            {CONFIG.glassFrames.concat(CONFIG.louvers).map(acc => (
+                                                <button key={acc.id} onClick={()=>{
+                                                    fabric.Image.fromURL(`accessories/${acc.id}_白.png`, (img)=>{
+                                                        img.set({ left: window.innerWidth/2, top: 200, originX: 'center', originY: 'center', id: `acc-${Date.now()}`, baseId: acc.id, currentColor: "白", scaleX: 0.5, scaleY: 0.5, hasControls: false, hasBorders: true, cornerColor: '#3b82f6' });
+                                                        fabricCanvas.add(img).setActiveObject(img).renderAll();
+                                                    });
+                                                }} className="p-4 bg-slate-50 rounded-2xl border-2 border-slate-100 text-left flex items-center gap-4">
+                                                    <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center shadow-sm">＋</div>
+                                                    <span className="text-xs font-black text-slate-600">{acc.name}</span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div className="animate-in fade-in slide-in-from-bottom-4">
+                                        <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 mb-6 flex justify-between items-center">
+                                            <span className="text-xs font-black text-blue-700 italic truncate">正在調整：{selectedAcc.baseId}</span>
+                                            <button onClick={()=>{fabricCanvas.remove(selectedAcc); fabricCanvas.renderAll(); setSelectedAcc(null);}} className="text-xs font-bold text-rose-500 underline">移除</button>
+                                        </div>
+                                        <div className="grid grid-cols-3 gap-3">
+                                            {CONFIG.accColors.map(c => (
+                                                <button key={c.id} onClick={()=>{
+                                                    fabric.Image.fromURL(`accessories/${selectedAcc.baseId}_${c.id}.png`, (newImg)=>{
+                                                        newImg.set({ left: selectedAcc.left, top: selectedAcc.top, scaleX: selectedAcc.scaleX, scaleY: selectedAcc.scaleY, id: selectedAcc.id, baseId: selectedAcc.baseId, currentColor: c.id, hasControls: false, cornerColor: '#3b82f6' });
+                                                        fabricCanvas.remove(selectedAcc).add(newImg).setActiveObject(newImg).renderAll();
+                                                        setSelectedAcc(newImg);
+                                                    });
+                                                }} className={`p-4 border-2 rounded-2xl flex flex-col items-center gap-2 ${selectedAcc.currentColor===c.id?'border-blue-500 bg-blue-50':'border-slate-50'}`}>
+                                                    <div className="w-8 h-8 rounded shadow-sm border border-white" style={{backgroundColor: c.hex}}></div><span className="text-[10px] font-bold">{c.name}</span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>
 
                     {/* 遮罩 */}
-                    {activeMenu && <div onClick={()=>setActiveMenu(null)} className="fixed inset-0 bg-black/20 z-20"></div>}
+                    {activeMenu && <div onClick={()=>setActiveMenu(null)} className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-20"></div>}
                 </div>
             );
         };
