@@ -19,11 +19,13 @@
 
     <style>
         body { background-color: #f8fafc; font-family: -apple-system, sans-serif; overflow: hidden; touch-action: manipulation; }
-        .canvas-bg { background-image: linear-gradient(45deg, #e5e7eb 25%, transparent 25%), linear-gradient(-45deg, #e5e7eb 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e5e7eb 75%), linear-gradient(-45deg, transparent 75%, #e5e7eb 75%); background-size: 20px 20px; }
-        .drawer { transform: translateY(100%); transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1); padding-bottom: env(safe-area-inset-bottom); }
-        .drawer.active { transform: translateY(0); }
-        .nav-btn { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 4px; transition: all 0.2s; }
-        .nav-btn:active { transform: scale(0.9); background-color: #f1f5f9; }
+        .canvas-bg { background-image: linear-gradient(45deg, #e5e7eb 25%, transparent 25%), linear-gradient(-45deg, #e5e7eb 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e5e7eb 75%), linear-gradient(-45deg, transparent 75%, #e5e7eb 75%); background-size: 16px 16px; }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 4px; }
+        
+        /* 側邊欄動畫 */
+        .tab-content { animation: fadeIn 0.3s ease; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
     </style>
 </head>
 <body>
@@ -32,6 +34,9 @@
     <script type="text/babel">
         const { useState, useEffect, useRef, useMemo } = React;
 
+        // ==========================================================
+        // ★ 您的 Firebase Config ★
+        // ==========================================================
         const MY_FIREBASE_CONFIG = {
             apiKey: "AIzaSyD-I3XsPn77h4Vp6SYgZ5vhOZsovJBkhJk",
             authDomain: "artifacts-732a0.firebaseapp.com",
@@ -53,23 +58,32 @@
             glassFrames: [ { id: "GLS_G-01_467×725", name: "玻璃框 G-01" }, { id: "GLS_T_08_200×605", name: "玻璃框 T-08" }, { id: "GLS_T_09_370×605", name: "玻璃框 T-09" } ],
             louvers: [ { id: "LOU_A-03_378×230", name: "百頁 A-03" }, { id: "LOU_A-04_200×650", name: "百頁 A-04" } ],
             accColors: [ { id: "白", name: "白色", hex: "#FFFFFF" }, { id: "柚木", name: "柚木色", hex: "#966F33" }, { id: "胡桃", name: "胡桃色", hex: "#5D4037" } ],
+            // 將所有可能的型號先列出，免去全域掃描
             potentialDesigns: ["110", "120", "122", "123", "125", "126", "141", "144", "150", "151", "152", "153", "305", "306", "307", "308", "309", "401", "501", "502", "503", "504", "601", "602", "605", "650", "651", "751", "752", "755", "760", "761", "762", "763", "764", "765", "780", "790", "791", "802", "880", "900", "01", "02", "04", "07", "08", "11", "14", "15", "16", "20", "30", "50", "51", "54", "58", "60", "61", "62", "63", "64", "65", "75", "76", "78", "79", "80", "87", "88", "90", "95", "100", "200", "201"]
         };
 
         const App = () => {
             const [isAuthorized, setIsAuthorized] = useState(false);
-            const [activeMenu, setActiveMenu] = useState(null);
+            const [authKey, setAuthKey] = useState('');
+            const [authError, setAuthError] = useState('');
+            
+            const [activeTab, setActiveTab] = useState('designs'); // 'designs', 'colors', 'acc'
             const [selection, setSelection] = useState({ design: '01', file: '0111.jpg', lineColor: '' });
-            const [availableFiles, setAvailableFiles] = useState(new Set());
             const [fabricCanvas, setFabricCanvas] = useState(null);
             const [selectedAcc, setSelectedAcc] = useState(null);
-            const [doorScale, setDoorScale] = useState(1); // ★ 重要：儲存目前門片的縮放值
-            const [isSyncing, setIsSyncing] = useState(true);
-            const [authKey, setAuthKey] = useState('');
+            const [doorScale, setDoorScale] = useState(1);
+            
+            // ★ 局部掃描狀態 (解決流量卡死與自動篩選)
+            const [availableColors, setAvailableColors] = useState(new Set());
+            const [availableLines, setAvailableLines] = useState(new Set());
+            const [isScanning, setIsScanning] = useState(false);
+            const canvasContainerRef = useRef(null);
 
+            // 1. 金鑰驗證
             const checkKey = async (key) => {
                 const targetKey = key || authKey;
                 if (!targetKey) return;
+                setAuthError('驗證中...');
                 try {
                     const app = FB.getApps().length === 0 ? FB.initializeApp(MY_FIREBASE_CONFIG) : FB.getApp();
                     const db = FB.getFirestore(app);
@@ -79,32 +93,8 @@
                     if (matched && new Date(matched.expiresAt) > new Date()) {
                         setIsAuthorized(true);
                         localStorage.setItem('cached_key', matched.key);
-                        startSmartScan();
-                    } else alert("密碼錯誤或過期");
-                } catch (e) { alert("連線失敗"); }
-            };
-
-            const startSmartScan = async () => {
-                const found = new Set();
-                const list = [];
-                CONFIG.potentialDesigns.forEach(d => {
-                    Object.keys(CONFIG.series).forEach(t => {
-                        Object.keys(CONFIG.colors).forEach(c => list.push({ f: 'doors', n: `${d}${t}${c}.jpg` }));
-                    });
-                    Object.keys(CONFIG.lineColors).forEach(lc => list.push({ f: 'lines', n: `${d}_${lc}.png` }));
-                });
-                for (let i = 0; i < list.length; i += 20) {
-                    const batch = list.slice(i, i + 20);
-                    await Promise.all(batch.map(async (item) => {
-                        try {
-                            const res = await fetch(`${item.f}/${item.n}`, { method: 'HEAD' });
-                            if (res.ok) found.add(`${item.f}/${item.n}`);
-                        } catch (e) {}
-                    }));
-                    if (i % 100 === 0) setAvailableFiles(new Set(found));
-                }
-                setAvailableFiles(new Set(found));
-                setIsSyncing(false);
+                    } else setAuthError("密碼錯誤或已過期");
+                } catch (e) { setAuthError("連線失敗，請檢查網路"); }
             };
 
             useEffect(() => {
@@ -112,227 +102,382 @@
                 if (saved) checkKey(saved);
             }, []);
 
+            // 2. ★ 智能局部掃描：只掃描「當前選擇造型」的顏色 (極低流量，瞬間完成)
             useEffect(() => {
-                if (!isAuthorized) return;
-                const canvas = new fabric.Canvas('main-canvas', { 
-                    width: window.innerWidth, 
-                    height: window.innerHeight - 80, 
-                    backgroundColor: 'transparent',
-                    preserveObjectStacking: true 
-                });
-                canvas.on('selection:created', (e) => setSelectedAcc(e.target.id.startsWith('acc') ? e.target : null));
-                canvas.on('selection:updated', (e) => setSelectedAcc(e.target.id.startsWith('acc') ? e.target : null));
-                canvas.on('selection:cleared', () => setSelectedAcc(null));
-                setFabricCanvas(canvas);
-                return () => canvas.dispose();
+                if (!isAuthorized || !selection.design) return;
+                
+                const scanDesignOptions = async () => {
+                    setIsScanning(true);
+                    const foundColors = new Set();
+                    const foundLines = new Set();
+                    const colorPromises = [];
+                    const linePromises = [];
+
+                    // 掃描這個型號的顏色
+                    Object.keys(CONFIG.series).forEach(tId => {
+                        Object.keys(CONFIG.colors).forEach(cId => {
+                            const file = `${selection.design}${tId}${cId}.jpg`;
+                            colorPromises.push(
+                                fetch(`doors/${file}`, { method: 'HEAD' })
+                                .then(res => { if (res.ok) foundColors.add(file); })
+                                .catch(() => {})
+                            );
+                        });
+                    });
+
+                    // 掃描這個型號的線條
+                    Object.keys(CONFIG.lineColors).forEach(lc => {
+                        const file = `${selection.design}_${lc}.png`;
+                        linePromises.push(
+                            fetch(`lines/${file}`, { method: 'HEAD' })
+                            .then(res => { if (res.ok) foundLines.add(file); })
+                            .catch(() => {})
+                        );
+                    });
+
+                    await Promise.all([...colorPromises, ...linePromises]);
+                    setAvailableColors(foundColors);
+                    setAvailableLines(foundLines);
+                    
+                    // 如果當前的 file 不在這個新搜尋的結果裡，自動跳到第一個可用的圖檔
+                    if (foundColors.size > 0 && !foundColors.has(selection.file)) {
+                        const firstAvailable = Array.from(foundColors).sort()[0];
+                        setSelection(prev => ({ ...prev, file: firstAvailable }));
+                    }
+                    
+                    setIsScanning(false);
+                };
+
+                scanDesignOptions();
+            }, [selection.design, isAuthorized]);
+
+            // 3. 初始化畫布 (精準填滿右側 2/3 空間)
+            useEffect(() => {
+                if (!isAuthorized || !canvasContainerRef.current) return;
+                const initCanvas = () => {
+                    if (fabricCanvas) fabricCanvas.dispose();
+                    const width = canvasContainerRef.current.clientWidth;
+                    const height = canvasContainerRef.current.clientHeight;
+                    
+                    const canvas = new fabric.Canvas('main-canvas', { 
+                        width: width, 
+                        height: height, 
+                        backgroundColor: 'transparent',
+                        preserveObjectStacking: true 
+                    });
+                    
+                    // 點擊配件時自動切換到「配件分頁」方便刪除
+                    canvas.on('selection:created', (e) => {
+                        if (e.target && e.target.id && e.target.id.startsWith('acc')) {
+                            setSelectedAcc(e.target);
+                            setActiveTab('acc');
+                        }
+                    });
+                    canvas.on('selection:updated', (e) => {
+                        if (e.target && e.target.id && e.target.id.startsWith('acc')) {
+                            setSelectedAcc(e.target);
+                        }
+                    });
+                    canvas.on('selection:cleared', () => setSelectedAcc(null));
+                    
+                    setFabricCanvas(canvas);
+                };
+                
+                initCanvas();
+                // 註冊視窗變更大小時重繪
+                window.addEventListener('resize', initCanvas);
+                return () => window.removeEventListener('resize', initCanvas);
             }, [isAuthorized]);
 
-            // 門片與配件比例同步邏輯
+            // 4. 門片與配件比例同步繪製
             useEffect(() => {
-                if (!fabricCanvas || !selection.file) return;
-                fabric.Image.fromURL(`doors/${selection.file.replace('doors/','')}`, (doorImg) => {
+                if (!fabricCanvas || !selection.file || isScanning) return;
+                
+                const pureFile = selection.file.replace('doors/', '');
+                fabric.Image.fromURL(`doors/${pureFile}`, (doorImg) => {
                     if (!doorImg) return;
+                    
+                    const canvasWidth = fabricCanvas.getWidth();
+                    const canvasHeight = fabricCanvas.getHeight();
+
                     const existingDoor = fabricCanvas.getObjects().find(o => o.id === 'door');
                     if (existingDoor) fabricCanvas.remove(existingDoor);
 
-                    // 1. 計算新的縮放比例
-                    const newScale = Math.min((window.innerWidth * 0.8) / doorImg.width, (window.innerHeight * 0.6) / doorImg.height);
-                    setDoorScale(newScale); // 儲存起來供配件使用
+                    // 縮放演算法：讓門片佔據畫布高度的 85%
+                    const newScale = Math.min((canvasWidth * 0.9) / doorImg.width, (canvasHeight * 0.85) / doorImg.height);
+                    setDoorScale(newScale);
 
-                    doorImg.set({ scaleX: newScale, scaleY: newScale, selectable: false, id: 'door', evented: false, originX: 'center', originY: 'center', left: window.innerWidth/2, top: (window.innerHeight - 150)/2 });
+                    doorImg.set({ 
+                        scaleX: newScale, scaleY: newScale, selectable: false, id: 'door', evented: false, 
+                        originX: 'center', originY: 'center', left: canvasWidth / 2, top: canvasHeight / 2 
+                    });
                     fabricCanvas.add(doorImg).sendToBack(doorImg);
 
-                    // 2. 同步所有已存在的配件比例
+                    // 比例更新：強制刷新所有配件大小
                     fabricCanvas.getObjects().forEach(obj => {
                         if (obj.id && obj.id.startsWith('acc')) {
                             obj.set({ scaleX: newScale, scaleY: newScale });
-                            obj.setCoords(); // 更新點擊區域
+                            obj.setCoords();
                         }
                     });
 
-                    // 3. 同步線條層比例
+                    // 同步線條
                     const linePath = `lines/${selection.design}_${selection.lineColor}.png`;
                     const existingLine = fabricCanvas.getObjects().find(o => o.id === 'lineLayer');
                     if (existingLine) fabricCanvas.remove(existingLine);
 
-                    if (selection.lineColor && availableFiles.has(linePath)) {
+                    if (selection.lineColor && availableLines.has(linePath.replace('lines/',''))) {
                         fabric.Image.fromURL(linePath, (lineImg) => {
                             lineImg.set({ 
                                 scaleX: (doorImg.getScaledWidth()) / lineImg.width, 
                                 scaleY: (doorImg.getScaledHeight()) / lineImg.height, 
-                                selectable: false, id: 'lineLayer', evented: false, originX: 'center', originY: 'center', left: doorImg.left, top: doorImg.top 
+                                selectable: false, id: 'lineLayer', evented: false, 
+                                originX: 'center', originY: 'center', left: doorImg.left, top: doorImg.top 
                             });
                             fabricCanvas.add(lineImg);
-                            lineImg.moveTo(1);
+                            lineImg.moveTo(1); // 確保在門上面，配件下面
                             fabricCanvas.requestRenderAll();
                         });
                     }
                     fabricCanvas.requestRenderAll();
                 }, { crossOrigin: 'anonymous' });
-            }, [selection, fabricCanvas, availableFiles]);
+            }, [selection, fabricCanvas, availableLines, isScanning]);
 
-            const allDetectedDesigns = useMemo(() => {
-                const ds = new Set();
-                availableFiles.forEach(p => {
-                    const f = p.split('/').pop();
-                    const d = CONFIG.potentialDesigns.find(id => f.startsWith(id));
-                    if (d) ds.add(d);
-                });
-                return Array.from(ds).sort((a,b) => a.localeCompare(b, undefined, {numeric: true}));
-            }, [availableFiles]);
+            // 5. 下載命名邏輯
+            const handleDownload = () => {
+                if (!fabricCanvas) return;
+                const tId = selection.file.length >= 4 ? selection.file.charAt(selection.file.length - 6) : '';
+                const cId = selection.file.length >= 4 ? selection.file.charAt(selection.file.length - 5) : '';
+                const seriesName = CONFIG.series[tId] || '';
+                const colorName = CONFIG.colors[cId]?.name || '';
+                const lineName = selection.lineColor ? CONFIG.lineColors[selection.lineColor].name : '無';
+                
+                const fileName = `CY_${selection.design}_${seriesName}${colorName}_${lineName}線.png`;
+                
+                const link = document.createElement('a');
+                link.download = fileName;
+                link.href = fabricCanvas.toDataURL({ format: 'png', multiplier: 2 });
+                link.click();
+            };
 
             if (!isAuthorized) {
                 return (
-                    <div className="h-screen flex flex-col items-center justify-center bg-slate-900 px-10">
-                        <div className="w-20 h-20 bg-blue-600 rounded-3xl mb-8 flex items-center justify-center text-white text-4xl font-black italic shadow-2xl">CY</div>
-                        <h2 className="text-white text-lg font-bold mb-8 tracking-widest uppercase">系統授權訪問</h2>
-                        <input type="text" value={authKey} onChange={(e)=>setAuthKey(e.target.value)} placeholder="授權金鑰" className="w-full p-5 bg-slate-800 border border-slate-700 rounded-2xl text-center text-white mb-4 outline-none focus:border-blue-500 uppercase tracking-widest" />
-                        <button onClick={()=>checkKey()} className="w-full py-5 bg-blue-600 text-white rounded-2xl font-bold shadow-xl active:scale-95 transition-all">啟動系統</button>
+                    <div className="h-screen flex flex-col items-center justify-center bg-slate-900 px-8 text-center">
+                        <div className="w-20 h-20 bg-blue-600 rounded-3xl mb-6 flex items-center justify-center text-white text-4xl font-black italic shadow-2xl">CY</div>
+                        <h2 className="text-white text-xl font-bold mb-8 tracking-widest uppercase">系統授權訪問</h2>
+                        <input type="text" value={authKey} onChange={(e)=>setAuthKey(e.target.value)} onKeyDown={(e)=>e.key==='Enter'&&checkKey()} placeholder="輸入授權金鑰" className="w-full max-w-sm p-4 bg-slate-800 border border-slate-700 rounded-xl text-center text-white mb-3 outline-none focus:border-blue-500 uppercase tracking-widest font-bold" />
+                        {authError && <p className="text-rose-500 text-xs font-bold mb-4">{authError}</p>}
+                        <button onClick={()=>checkKey()} className="w-full max-w-sm py-4 bg-blue-600 text-white rounded-xl font-black shadow-xl active:scale-95 transition-all uppercase tracking-widest">登入系統</button>
                     </div>
                 );
             }
 
             return (
-                <div className="h-screen w-screen flex flex-col bg-slate-50 relative overflow-hidden font-sans">
-                    <div className="h-14 flex items-center justify-between px-6 bg-white border-b z-10 shrink-0">
-                        <div className="flex flex-col">
-                            <span className="text-[10px] text-slate-400 font-black uppercase tracking-widest font-mono">Current Model</span>
-                            <span className="text-sm font-black text-slate-700">{selection.design} - {selection.lineColor || 'None'}</span>
+                <div className="flex h-screen w-screen bg-slate-100 overflow-hidden font-sans">
+                    
+                    {/* 左側 1/3 控制面板 (手機 35%, 平板 300px) */}
+                    <div className="w-[36%] md:w-80 flex flex-col bg-white border-r border-slate-200 z-20 shadow-xl h-full shrink-0">
+                        {/* 分頁按鈕 */}
+                        <div className="flex h-14 bg-slate-50 border-b border-slate-200 shrink-0">
+                            <button onClick={()=>setActiveTab('designs')} className={`flex-1 flex flex-col items-center justify-center transition-colors ${activeTab==='designs'?'bg-white text-blue-600 border-b-2 border-blue-600':'text-slate-400 hover:bg-slate-100'}`}>
+                                <span className="text-[12px] font-black">造型</span>
+                            </button>
+                            <button onClick={()=>setActiveTab('colors')} className={`flex-1 flex flex-col items-center justify-center transition-colors ${activeTab==='colors'?'bg-white text-blue-600 border-b-2 border-blue-600':'text-slate-400 hover:bg-slate-100'}`}>
+                                <span className="text-[12px] font-black">顏色</span>
+                            </button>
+                            <button onClick={()=>setActiveTab('acc')} className={`flex-1 flex flex-col items-center justify-center transition-colors ${activeTab==='acc'?'bg-white text-blue-600 border-b-2 border-blue-600':'text-slate-400 hover:bg-slate-100'}`}>
+                                <span className="text-[12px] font-black">配件</span>
+                            </button>
                         </div>
-                        <button onClick={() => {
-                            const link = document.createElement('a');
-                            const fileName = `CY_${selection.design}_S${selection.file.slice(-6,-4)}_${selection.lineColor || 'Origin'}.png`;
-                            link.download = fileName;
-                            link.href = fabricCanvas.toDataURL({ format: 'png', multiplier: 2 });
-                            link.click();
-                        }} className="bg-slate-900 text-white px-5 py-2 rounded-full text-[11px] font-black tracking-widest uppercase">保存圖檔</button>
-                    </div>
 
-                    <div className="flex-1 canvas-bg flex items-center justify-center relative shadow-inner">
-                        <canvas id="main-canvas"></canvas>
-                        {isSyncing && <div className="absolute top-4 left-4 bg-white/90 px-4 py-1.5 rounded-full text-[10px] font-black text-blue-500 shadow-sm border border-blue-50">雲端同步中...</div>}
-                    </div>
-
-                    <div className="h-24 bg-white border-t flex items-center justify-around px-4 z-30 shadow-[0_-5px_20px_rgba(0,0,0,0.05)] pb-6">
-                        <button onClick={()=>setActiveMenu('designs')} className={`nav-btn ${activeMenu==='designs'?'text-blue-600':'text-slate-400'}`}>
-                            <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-lg">🔲</div><span className="text-[10px] font-black uppercase">型號</span>
-                        </button>
-                        <button onClick={()=>setActiveMenu('colors')} className={`nav-btn ${activeMenu==='colors'?'text-blue-600':'text-slate-400'}`}>
-                            <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-lg">🎨</div><span className="text-[10px] font-black uppercase">材質</span>
-                        </button>
-                        <button onClick={()=>setActiveMenu('acc')} className={`nav-btn ${activeMenu==='acc'?'text-blue-600':'text-slate-400'}`}>
-                            <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-lg">⚙️</div><span className="text-[10px] font-black uppercase">配件</span>
-                        </button>
-                    </div>
-
-                    <div className={`drawer fixed bottom-0 left-0 w-full max-h-[70vh] bg-white rounded-t-[40px] shadow-[0_-20px_50px_rgba(0,0,0,0.15)] p-6 z-40 overflow-y-auto ${activeMenu?'active':''}`}>
-                        <div className="flex justify-between items-center mb-6 sticky top-0 bg-white pb-2">
-                            <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest">{activeMenu === 'designs' ? '選擇造型' : activeMenu === 'colors' ? '板材與線條' : '配件飾面'}</h3>
-                            <button onClick={()=>setActiveMenu(null)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center font-bold">×</button>
-                        </div>
-                        
-                        {activeMenu === 'designs' && (
-                            <div className="grid grid-cols-3 gap-3">
-                                {allDetectedDesigns.map(id => (
-                                    <button key={id} onClick={()=>{
-                                        const best = Array.from(availableFiles).find(f=>f.startsWith('doors/')&&f.includes(id)&&!f.includes('-'))||`${id}11.jpg`;
-                                        setSelection({...selection, design:id, file:best});
-                                        setActiveMenu(null);
-                                    }} className={`p-4 border-2 rounded-2xl text-xs font-black transition-all ${selection.design===id?'border-blue-500 bg-blue-50 text-blue-600 shadow-md':'border-slate-50 bg-slate-50'}`}>{id}</button>
-                                ))}
-                            </div>
-                        )}
-
-                        {activeMenu === 'colors' && (
-                            <div className="flex flex-col gap-8">
-                                <div>
-                                    <p className="text-[10px] font-black text-slate-300 mb-3 uppercase tracking-widest">線條顏色</p>
-                                    <div className="grid grid-cols-4 gap-2">
-                                        <button onClick={()=>{setSelection({...selection, lineColor:''}); setActiveMenu(null);}} className={`p-2 border-2 rounded-xl text-[10px] font-black ${selection.lineColor===''?'border-blue-500 bg-blue-50':'border-slate-50'}`}>原樣</button>
-                                        {Object.entries(CONFIG.lineColors).map(([lc, d]) => {
-                                            if (!availableFiles.has(`lines/${selection.design}_${lc}.png`)) return null;
-                                            return (
-                                                <button key={lc} onClick={()=>{setSelection({...selection, lineColor:lc}); setActiveMenu(null);}} className={`p-2 border-2 rounded-xl flex flex-col items-center gap-1 ${selection.lineColor===lc?'border-blue-500 bg-blue-50 shadow-sm':'border-slate-50'}`}>
-                                                    <div className="w-full h-3 rounded-full" style={{backgroundColor: d.hex}}></div><span className="text-[9px] font-bold">{d.name}</span>
-                                                </button>
-                                            );
-                                        })}
-                                    </div>
+                        {/* 分頁內容 */}
+                        <div className="flex-1 overflow-y-auto p-3 custom-scrollbar bg-slate-50/50 tab-content">
+                            
+                            {/* 1. 造型選擇 */}
+                            {activeTab === 'designs' && (
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                    {CONFIG.potentialDesigns.map(id => (
+                                        <button key={id} onClick={()=>{
+                                            setSelection({...selection, design:id}); // 點擊後會觸發掃描
+                                            setActiveTab('colors'); // 選完自動跳到顏色分頁
+                                        }} className={`py-3 border-2 rounded-xl text-[11px] font-black transition-all ${selection.design===id?'border-blue-500 bg-blue-50 text-blue-600 shadow-sm':'border-slate-200 bg-white hover:border-blue-200 text-slate-600'}`}>
+                                            {id}
+                                        </button>
+                                    ))}
                                 </div>
-                                {Object.entries(CONFIG.series).map(([tId, tName]) => (
-                                    <div key={tId}>
-                                        <p className="text-[10px] font-black text-slate-300 mb-3 uppercase tracking-widest">{tName}</p>
-                                        <div className="grid grid-cols-4 gap-3">
-                                            {Object.entries(CONFIG.colors).map(([cId, c]) => {
-                                                const fk = `doors/${selection.design}${tId}${cId}.jpg`;
-                                                if (!availableFiles.has(fk)) return null;
+                            )}
+
+                            {/* 2. 顏色選擇 (自動篩選版) */}
+                            {activeTab === 'colors' && (
+                                <div className="flex flex-col gap-6 pb-6">
+                                    {isScanning ? (
+                                        <div className="flex flex-col items-center justify-center py-10 opacity-50">
+                                            <div className="w-6 h-6 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-2"></div>
+                                            <p className="text-[10px] font-bold text-blue-600">正在篩選可用板材...</p>
+                                        </div>
+                                    ) : availableColors.size === 0 ? (
+                                        <div className="text-center py-10 text-[10px] text-slate-400 font-bold border-2 border-dashed border-slate-200 rounded-xl mx-2">此造型暫無可用圖檔</div>
+                                    ) : (
+                                        <>
+                                            {/* 線條區 */}
+                                            {availableLines.size > 0 && (
+                                                <div className="bg-white p-3 rounded-xl shadow-sm border border-slate-100">
+                                                    <p className="text-[10px] font-black text-slate-400 mb-2 border-l-2 border-blue-400 pl-1 uppercase">線條 (Line)</p>
+                                                    <div className="grid grid-cols-2 gap-2">
+                                                        <button onClick={()=>setSelection({...selection, lineColor:''})} className={`p-2 border-2 rounded-lg flex flex-col items-center gap-1 ${selection.lineColor===''?'border-blue-500 bg-blue-50':'border-slate-100'}`}>
+                                                            <div className="w-full h-1.5 bg-slate-200 rounded-full"></div><span className="text-[9px] font-bold text-slate-600">原樣</span>
+                                                        </button>
+                                                        {Object.entries(CONFIG.lineColors).map(([lc, d]) => {
+                                                            if (!availableLines.has(`${selection.design}_${lc}.png`)) return null;
+                                                            return (
+                                                                <button key={lc} onClick={()=>setSelection({...selection, lineColor:lc})} className={`p-2 border-2 rounded-lg flex flex-col items-center gap-1 ${selection.lineColor===lc?'border-blue-500 bg-blue-50':'border-slate-100'}`}>
+                                                                    <div className="w-full h-1.5 rounded-full border border-slate-200" style={{backgroundColor: d.hex}}></div><span className="text-[9px] font-bold text-slate-600">{d.name}</span>
+                                                                </button>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            )}
+                                            
+                                            {/* 板材區 */}
+                                            {Object.entries(CONFIG.series).map(([tId, tName]) => {
+                                                const seriesColors = Object.entries(CONFIG.colors).filter(([cId]) => availableColors.has(`${selection.design}${tId}${cId}.jpg`));
+                                                if (seriesColors.length === 0) return null; // 該系列無顏色則自動隱藏
+
                                                 return (
-                                                    <button key={cId} onClick={()=>{setSelection({...selection, file:fk}); setActiveMenu(null);}} className="flex flex-col items-center gap-2">
-                                                        <div className={`w-full aspect-square rounded-2xl border-2 transition-all ${selection.file===fk?'border-blue-500 shadow-md scale-105':'border-slate-100 shadow-inner'}`} style={{backgroundColor: c.hex}}></div>
-                                                        <span className="text-[10px] font-black text-slate-500 truncate w-full text-center leading-tight">{c.name}</span>
-                                                    </button>
+                                                    <div key={tId}>
+                                                        <p className="text-[10px] font-black text-slate-500 mb-2 border-l-2 border-slate-300 pl-1 uppercase">{tName}</p>
+                                                        <div className="grid grid-cols-2 gap-2">
+                                                            {seriesColors.map(([cId, c]) => {
+                                                                const fk = `${selection.design}${tId}${cId}.jpg`;
+                                                                return (
+                                                                    <button key={cId} onClick={()=>setSelection({...selection, file:fk})} className={`p-2 border-2 rounded-xl flex flex-col items-center gap-1 transition-all bg-white ${selection.file===fk?'border-rose-500 shadow-md ring-2 ring-rose-50':'border-slate-100 hover:border-slate-300'}`}>
+                                                                        <div className="w-full aspect-square rounded-lg shadow-inner border border-slate-100" style={{backgroundColor: c.hex}}></div>
+                                                                        <span className="text-[9px] font-black text-slate-600 truncate w-full text-center leading-none mt-1">{c.name}</span>
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </div>
                                                 );
                                             })}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
+                                        </>
+                                    )}
+                                </div>
+                            )}
 
-                        {activeMenu === 'acc' && (
-                            <div className="flex flex-col gap-6">
-                                {!selectedAcc ? (
-                                    <>
-                                        <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">點擊新增至門片</p>
-                                        <div className="grid grid-cols-1 gap-2">
+                            {/* 3. 配件選擇 */}
+                            {activeTab === 'acc' && (
+                                <div className="flex flex-col gap-4 pb-6">
+                                    {!selectedAcc ? (
+                                        <>
+                                            <div className="bg-emerald-50 text-emerald-600 text-[10px] font-bold p-3 rounded-lg border border-emerald-100 mb-2 text-center">點擊下方配件加入門板</div>
                                             {CONFIG.glassFrames.concat(CONFIG.louvers).map(acc => (
                                                 <button key={acc.id} onClick={()=>{
                                                     fabric.Image.fromURL(`accessories/${acc.id}_白.png`, (img)=>{
-                                                        // ★ 修正：新增配件時直接繼承 doorScale
-                                                        img.set({ left: window.innerWidth/2, top: (window.innerHeight - 150)/2, originX: 'center', originY: 'center', id: `acc-${Date.now()}`, baseId: acc.id, currentColor: "白", scaleX: doorScale, scaleY: doorScale, hasControls: true, hasBorders: true, cornerColor: '#3b82f6', cornerSize: 20 });
+                                                        const canvasWidth = fabricCanvas.getWidth();
+                                                        const canvasHeight = fabricCanvas.getHeight();
+                                                        img.set({ 
+                                                            left: canvasWidth/2, top: canvasHeight/2, 
+                                                            originX: 'center', originY: 'center', 
+                                                            id: `acc-${Date.now()}`, baseId: acc.id, currentColor: "白", 
+                                                            scaleX: doorScale, scaleY: doorScale, 
+                                                            hasControls: true, cornerColor: '#3b82f6', cornerSize: 24, padding: 5, transparentCorners: false
+                                                        });
                                                         fabricCanvas.add(img).setActiveObject(img).renderAll();
                                                     });
-                                                }} className="p-4 bg-slate-50 rounded-3xl border-2 border-slate-100 text-left flex items-center gap-4 active:bg-blue-50">
-                                                    <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm text-blue-500 font-black">+</div>
-                                                    <span className="text-xs font-black text-slate-600">{acc.name}</span>
+                                                }} className="p-3 bg-white rounded-xl border-2 border-slate-200 flex items-center gap-3 active:scale-95 transition-transform hover:border-blue-300">
+                                                    <div className="w-8 h-8 bg-blue-50 text-blue-500 rounded flex items-center justify-center font-black shadow-sm">+</div>
+                                                    <span className="text-[11px] font-black text-slate-700">{acc.name}</span>
                                                 </button>
                                             ))}
+                                        </>
+                                    ) : (
+                                        <div className="bg-white p-3 rounded-xl border-2 border-blue-200 shadow-sm animate-in fade-in slide-in-from-top-2">
+                                            <p className="text-[10px] text-blue-500 font-black mb-1">正在編輯</p>
+                                            <p className="text-xs font-black text-slate-800 mb-4 truncate">{selectedAcc.baseId}</p>
+                                            
+                                            {/* 超大刪除按鈕 */}
+                                            <button onClick={()=>{
+                                                fabricCanvas.remove(selectedAcc); 
+                                                fabricCanvas.renderAll(); 
+                                                setSelectedAcc(null);
+                                            }} className="w-full py-3 bg-rose-500 text-white rounded-lg font-black text-[11px] shadow-md active:bg-rose-600 active:scale-95 transition-all mb-5 flex items-center justify-center gap-2">
+                                                🗑️ 刪除此配件
+                                            </button>
+
+                                            <p className="text-[10px] font-black text-slate-400 mb-2 border-l-2 border-slate-200 pl-1 uppercase">飾面顏色更換</p>
+                                            <div className="grid grid-cols-2 gap-2">
+                                                {CONFIG.accColors.map(c => (
+                                                    <button key={c.id} onClick={()=>{
+                                                        fabric.Image.fromURL(`accessories/${selectedAcc.baseId}_${c.id}.png`, (newImg)=>{
+                                                            newImg.set({ 
+                                                                left: selectedAcc.left, top: selectedAcc.top, 
+                                                                scaleX: selectedAcc.scaleX, scaleY: selectedAcc.scaleY, 
+                                                                id: selectedAcc.id, baseId: selectedAcc.baseId, currentColor: c.id, 
+                                                                hasControls: true, cornerColor: '#3b82f6', cornerSize: 24, padding: 5, transparentCorners: false
+                                                            });
+                                                            fabricCanvas.remove(selectedAcc).add(newImg).setActiveObject(newImg).renderAll();
+                                                            setSelectedAcc(newImg);
+                                                        });
+                                                    }} className={`p-2 border-2 rounded-lg flex flex-col items-center gap-1 ${selectedAcc.currentColor===c.id?'border-blue-500 bg-blue-50':'border-slate-100 hover:bg-slate-50'}`}>
+                                                        <div className="w-6 h-6 rounded-full border shadow-inner" style={{backgroundColor: c.hex}}></div>
+                                                        <span className="text-[9px] font-black text-slate-600">{c.name}</span>
+                                                    </button>
+                                                ))}
+                                            </div>
                                         </div>
-                                    </>
-                                ) : (
-                                    <div className="animate-in slide-in-from-bottom-8">
-                                        <div className="bg-emerald-50 p-5 rounded-3xl border border-emerald-100 mb-6 flex justify-between items-center">
-                                            <div className="flex flex-col"><span className="text-[9px] font-black text-emerald-400 uppercase">Selected Accessory</span><span className="text-xs font-black text-emerald-700 truncate">{selectedAcc.baseId}</span></div>
-                                            <button onClick={()=>{fabricCanvas.remove(selectedAcc); fabricCanvas.renderAll(); setSelectedAcc(null);}} className="bg-rose-500 text-white px-4 py-2 rounded-xl text-[10px] font-black shadow-lg">移除配件</button>
-                                        </div>
-                                        <p className="text-[10px] font-black text-slate-300 mb-3 uppercase">變更配件飾面顏色</p>
-                                        <div className="grid grid-cols-3 gap-3">
-                                            {CONFIG.accColors.map(c => (
-                                                <button key={c.id} onClick={()=>{
-                                                    fabric.Image.fromURL(`accessories/${selectedAcc.baseId}_${c.id}.png`, (newImg)=>{
-                                                        // ★ 修正：切換顏色時也要維持目前的 doorScale
-                                                        newImg.set({ left: selectedAcc.left, top: selectedAcc.top, scaleX: doorScale, scaleY: doorScale, id: selectedAcc.id, baseId: selectedAcc.baseId, currentColor: c.id, hasControls: true, cornerColor: '#3b82f6', cornerSize: 20 });
-                                                        fabricCanvas.remove(selectedAcc).add(newImg).setActiveObject(newImg).renderAll();
-                                                        setSelectedAcc(newImg);
-                                                    });
-                                                }} className={`p-4 border-2 rounded-3xl flex flex-col items-center gap-2 ${selectedAcc.currentColor===c.id?'border-emerald-500 bg-emerald-50 shadow-md':'border-slate-50 bg-white'}`}>
-                                                    <div className="w-8 h-8 rounded-full shadow-inner border-2 border-white" style={{backgroundColor: c.hex}}></div><span className="text-[10px] font-black text-slate-600">{c.name}</span>
-                                                </button>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
+                                    )}
+                                </div>
+                            )}
+
+                        </div>
+                    </div>
+
+                    {/* 右側 2/3 主體視圖 */}
+                    <div className="flex-1 flex flex-col relative h-full">
+                        {/* 頂部控制列 */}
+                        <div className="h-14 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-4 z-10 shrink-0 shadow-sm">
+                            <div className="flex flex-col">
+                                <span className="text-[9px] font-black text-slate-400 tracking-widest uppercase">Model Info</span>
+                                <span className="text-[11px] font-black text-slate-800">
+                                    {selection.design} {selection.lineColor ? `(${CONFIG.lineColors[selection.lineColor].name})` : ''}
+                                </span>
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={handleDownload} className="bg-slate-900 text-white px-4 py-2 rounded-lg text-[10px] font-black tracking-widest shadow-md active:scale-95 transition-transform uppercase flex items-center gap-1">
+                                    💾 保存
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* 畫布容器 */}
+                        <div className="flex-1 canvas-bg relative w-full h-full" ref={canvasContainerRef} dangerouslySetInnerHTML={{ __html: '<canvas id="main-canvas"></canvas>' }}></div>
+                        
+                        {/* 浮動提示 */}
+                        {selectedAcc && (
+                            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-slate-900/80 text-white px-4 py-2 rounded-full text-[10px] font-bold backdrop-blur-sm pointer-events-none whitespace-nowrap shadow-xl">
+                                👈 請在左側面板編輯或刪除配件
                             </div>
                         )}
                     </div>
 
-                    {activeMenu && <div onClick={()=>setActiveMenu(null)} className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-20"></div>}
                 </div>
             );
         };
 
+        // 防白畫面保護器
+        class ErrorBoundary extends React.Component {
+            constructor(props) { super(props); this.state = { hasError: false, errMsg: '' }; }
+            static getDerivedStateFromError(error) { return { hasError: true, errMsg: error.message }; }
+            render() {
+                if (this.state.hasError) return <div className="p-8 text-rose-600 font-bold bg-rose-50 h-screen w-screen">系統發生錯誤：<br/>{this.state.errMsg}</div>;
+                return this.props.children;
+            }
+        }
+
         const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
+        root.render(<ErrorBoundary><App /></ErrorBoundary>);
     </script>
 </body>
 </html>
