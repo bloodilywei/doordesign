@@ -32,6 +32,15 @@
     <script type="text/babel">
         const { useState, useEffect, useRef, useMemo } = React;
 
+        // ★ 畫布金鐘罩：絕對禁止 React 干涉重繪，保護 Fabric.js 結構
+        const CanvasBox = React.memo(() => {
+            return (
+                <div id="canvas-container-wrapper" className="absolute inset-0 w-full h-full">
+                    <canvas id="main-canvas"></canvas>
+                </div>
+            );
+        }, () => true); // 傳回 true 代表永遠不重新渲染這個 DOM
+
         const MY_FIREBASE_CONFIG = {
             apiKey: "AIzaSyD-I3XsPn77h4Vp6SYgZ5vhOZsovJBkhJk",
             authDomain: "artifacts-732a0.firebaseapp.com",
@@ -70,7 +79,6 @@
             const [availableColors, setAvailableColors] = useState(new Set());
             const [availableLines, setAvailableLines] = useState(new Set());
             const [isScanning, setIsScanning] = useState(false);
-            const canvasContainerRef = useRef(null);
 
             const sortedDesigns = useMemo(() => {
                 return [...CONFIG.potentialDesigns].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
@@ -98,7 +106,7 @@
                 if (saved) checkKey(saved);
             }, []);
 
-            // ★ 智能掃描：加入防封鎖的「分批排隊機制」
+            // 智能掃描 (排隊限速 + 支援跳色 + 防 CORS 封鎖)
             useEffect(() => {
                 if (!isAuthorized || !selection.design) return;
                 
@@ -106,7 +114,7 @@
                     setIsScanning(true);
                     const foundColors = new Set();
                     const foundLines = new Set();
-                    const scanTasks = []; // 將所有請求變成「任務清單」
+                    const scanTasks = []; 
 
                     const checkFile = async (folder, filename) => {
                         try {
@@ -130,7 +138,6 @@
 
                     const extendedSuffixes = ["-01", "-02", "-03", "-04", "-05", "-06", "-07", "-08", "-09", "-1", "-2", "-3", "-4"];
 
-                    // 將任務加入清單，先不執行
                     Object.keys(CONFIG.series).forEach(tId => {
                         Object.keys(CONFIG.colors).forEach(cId => {
                             scanTasks.push(() => checkFile('doors', `${selection.design}${tId}${cId}.jpg`));
@@ -145,12 +152,10 @@
                         scanTasks.push(() => checkFile('lines', `${selection.design}_${lc}.png`));
                     });
 
-                    // ★ 分批執行機制 (一次 15 個，休息 30 毫秒)
                     const CHUNK_SIZE = 15;
                     for (let i = 0; i < scanTasks.length; i += CHUNK_SIZE) {
                         const chunk = scanTasks.slice(i, i + CHUNK_SIZE);
                         await Promise.all(chunk.map(fn => fn()));
-                        // 稍微停頓，讓 GitHub 伺服器喘息，防止被當作攻擊
                         await new Promise(resolve => setTimeout(resolve, 30)); 
                     }
 
@@ -169,12 +174,15 @@
 
             // 畫布初始化與視窗重設對齊
             useEffect(() => {
-                if (!isAuthorized || !canvasContainerRef.current) return;
+                if (!isAuthorized) return;
                 
+                const wrapper = document.getElementById('canvas-container-wrapper');
+                if (!wrapper) return;
+
                 if (!fabricCanvas) {
                     const canvas = new fabric.Canvas('main-canvas', { 
-                        width: canvasContainerRef.current.clientWidth, 
-                        height: canvasContainerRef.current.clientHeight, 
+                        width: wrapper.clientWidth || window.innerWidth * 0.6, 
+                        height: wrapper.clientHeight || window.innerHeight, 
                         backgroundColor: 'transparent',
                         preserveObjectStacking: true 
                     });
@@ -198,18 +206,23 @@
                 }
 
                 const handleResize = () => {
-                    if (fabricCanvas && canvasContainerRef.current) {
-                        fabricCanvas.setWidth(canvasContainerRef.current.clientWidth);
-                        fabricCanvas.setHeight(canvasContainerRef.current.clientHeight);
+                    const container = document.getElementById('canvas-container-wrapper');
+                    if (fabricCanvas && container) {
+                        const cw = container.clientWidth;
+                        const ch = container.clientHeight;
+                        if (cw === 0 || ch === 0) return; // 避免為 0 時縮放崩潰
+
+                        fabricCanvas.setWidth(cw);
+                        fabricCanvas.setHeight(ch);
                         
                         const door = fabricCanvas.getObjects().find(o => o.id === 'door');
-                        if (door) {
-                            const newScale = Math.min((fabricCanvas.getWidth() * 0.95) / door.width, (fabricCanvas.getHeight() * 0.95) / door.height);
+                        if (door && door.width) {
+                            const newScale = Math.min((cw * 0.95) / door.width, (ch * 0.95) / door.height);
                             setDoorScale(newScale);
-                            door.set({ scaleX: newScale, scaleY: newScale, left: fabricCanvas.getWidth()/2, top: fabricCanvas.getHeight()/2 });
+                            door.set({ scaleX: newScale, scaleY: newScale, left: cw/2, top: ch/2 });
                             
                             const line = fabricCanvas.getObjects().find(o => o.id === 'lineLayer');
-                            if (line) {
+                            if (line && line.width) {
                                 line.set({ scaleX: door.getScaledWidth() / line.width, scaleY: door.getScaledHeight() / line.height, left: door.left, top: door.top });
                             }
                             
@@ -229,26 +242,31 @@
                 return () => { window.removeEventListener('resize', handleResize); clearTimeout(timer); };
             }, [isAuthorized, fabricCanvas, activeMenu]);
 
-            // 載入圖片邏輯
+            // 載入圖片邏輯 (★ 移除 crossOrigin 防止被阻擋)
             useEffect(() => {
                 if (!fabricCanvas || !selection.file || isScanning) return;
                 
                 const pureFile = selection.file.replace('doors/', '');
+                
                 fabric.Image.fromURL(`doors/${pureFile}`, (doorImg) => {
-                    if (!doorImg) return;
+                    // ★ 防護：如果圖片無法讀取，終止動作避免 NaN 崩潰
+                    if (!doorImg || !doorImg.width) {
+                        console.warn("圖檔載入失敗或損毀:", pureFile);
+                        return; 
+                    }
                     
-                    const canvasWidth = fabricCanvas.getWidth();
-                    const canvasHeight = fabricCanvas.getHeight();
+                    const cw = fabricCanvas.getWidth() || window.innerWidth * 0.6;
+                    const ch = fabricCanvas.getHeight() || window.innerHeight;
 
                     const existingDoor = fabricCanvas.getObjects().find(o => o.id === 'door');
                     if (existingDoor) fabricCanvas.remove(existingDoor);
 
-                    const newScale = Math.min((canvasWidth * 0.95) / doorImg.width, (canvasHeight * 0.95) / doorImg.height);
+                    const newScale = Math.min((cw * 0.95) / doorImg.width, (ch * 0.95) / doorImg.height);
                     setDoorScale(newScale);
 
                     doorImg.set({ 
                         scaleX: newScale, scaleY: newScale, selectable: false, id: 'door', evented: false, 
-                        originX: 'center', originY: 'center', left: canvasWidth / 2, top: canvasHeight / 2 
+                        originX: 'center', originY: 'center', left: cw / 2, top: ch / 2 
                     });
                     fabricCanvas.add(doorImg).sendToBack(doorImg);
 
@@ -267,19 +285,22 @@
 
                     if (actualLineFile) {
                         fabric.Image.fromURL(`lines/${actualLineFile}`, (lineImg) => {
-                            lineImg.set({ 
-                                scaleX: (doorImg.getScaledWidth()) / lineImg.width, 
-                                scaleY: (doorImg.getScaledHeight()) / lineImg.height, 
-                                selectable: false, id: 'lineLayer', evented: false, 
-                                originX: 'center', originY: 'center', left: doorImg.left, top: doorImg.top 
-                            });
-                            fabricCanvas.add(lineImg);
-                            lineImg.moveTo(1);
-                            fabricCanvas.requestRenderAll();
+                            if (lineImg && lineImg.width) {
+                                lineImg.set({ 
+                                    scaleX: (doorImg.getScaledWidth()) / lineImg.width, 
+                                    scaleY: (doorImg.getScaledHeight()) / lineImg.height, 
+                                    selectable: false, id: 'lineLayer', evented: false, 
+                                    originX: 'center', originY: 'center', left: doorImg.left, top: doorImg.top 
+                                });
+                                fabricCanvas.add(lineImg);
+                                lineImg.moveTo(1); // 確保在配件下方
+                                fabricCanvas.requestRenderAll();
+                            }
                         });
+                    } else {
+                        fabricCanvas.requestRenderAll();
                     }
-                    fabricCanvas.requestRenderAll();
-                }, { crossOrigin: 'anonymous' });
+                }); // 這裡不加 crossOrigin，避免 Github 靜態頁面阻擋
             }, [selection, fabricCanvas, availableLines, isScanning]);
 
             const specialOptions = Array.from(availableColors).filter(f => f.includes('-'));
@@ -308,6 +329,7 @@
             return (
                 <div className="flex flex-col md:flex-row h-screen w-screen bg-slate-50 font-sans overflow-hidden">
                     
+                    {/* 左側面板區 */}
                     <div className={`
                         absolute md:relative top-0 left-0 h-[calc(100vh-5rem)] md:h-full 
                         w-[45%] md:w-80 bg-white border-r border-slate-200 z-20 shadow-2xl md:shadow-none 
@@ -346,7 +368,7 @@
                                             <div className="w-6 h-6 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-2"></div><p className="text-[10px] font-bold text-blue-600">讀取圖庫中...</p>
                                         </div>
                                     ) : availableColors.size === 0 ? (
-                                        <div className="text-center py-10 text-[10px] text-slate-400 font-bold border-2 border-dashed border-slate-200 rounded-xl mx-2">無可用圖檔</div>
+                                        <div className="text-center py-10 text-[10px] text-slate-400 font-bold border-2 border-dashed border-slate-200 rounded-xl mx-2">此型號無可用圖檔</div>
                                     ) : (
                                         <>
                                             {availableLines.size > 0 && (
@@ -474,10 +496,10 @@
                                     )}
                                 </div>
                             )}
-
                         </div>
                     </div>
 
+                    {/* 右側畫布與控制區 */}
                     <div className="flex-1 flex flex-col relative h-[calc(100vh-5rem)] md:h-full min-w-0">
                         <div className="h-14 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-4 z-10 shrink-0 shadow-sm">
                             <div className="flex flex-col">
@@ -491,9 +513,19 @@
                             </button>
                         </div>
 
-                        <div className="flex-1 canvas-bg relative w-full h-full" ref={canvasContainerRef} dangerouslySetInnerHTML={{ __html: '<canvas id="main-canvas"></canvas>' }}></div>
+                        {/* ★ 視覺載入器：掃描時顯示提示 */}
+                        <div className="flex-1 canvas-bg relative w-full h-full min-h-[300px]">
+                            <CanvasBox />
+                            {isScanning && (
+                                <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/60 backdrop-blur-sm z-50">
+                                    <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-3 shadow-lg"></div>
+                                    <p className="text-[11px] font-black text-blue-700 tracking-widest">載入圖庫與繪製中...</p>
+                                </div>
+                            )}
+                        </div>
                     </div>
 
+                    {/* 手機底部導航 */}
                     <div className="md:hidden absolute bottom-0 left-0 w-full h-20 bg-white border-t flex items-center justify-around z-30 shadow-[0_-5px_20px_rgba(0,0,0,0.05)] pb-4">
                         <button onClick={()=>setActiveMenu(activeMenu==='designs'?null:'designs')} className={`nav-btn flex flex-col items-center justify-center flex-1 h-full gap-1 ${activeMenu==='designs'?'text-blue-600':'text-slate-400'}`}>
                             <div className="text-xl">🔲</div><span className="text-[10px] font-black uppercase tracking-widest">選造型</span>
