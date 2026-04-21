@@ -261,6 +261,17 @@
 
             const specialOptions = Array.from(availableColors).filter(f => f.includes('-'));
 
+            // ★ 補回遺失的下載圖片功能
+            const handleDownload = () => {
+                if (!fabricCanvas) return;
+                const link = document.createElement('a');
+                // 自動產生包含型號與線條的檔名
+                const fileName = `CY_${selection.design}_${selection.file.replace('.jpg', '')}_${selection.lineColor || '原色'}.png`;
+                link.download = fileName;
+                link.href = fabricCanvas.toDataURL({ format: 'png', multiplier: 2 });
+                link.click();
+            };
+
             if (!isAuthorized) {
                 return (
                     <div className="h-screen flex flex-col items-center justify-center bg-slate-900 px-8 text-center">
