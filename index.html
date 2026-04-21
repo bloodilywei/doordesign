@@ -2,7 +2,6 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <!-- ★ 修正：開放 maximum-scale=5.0 讓手機可以雙指放大縮小 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover">
     <title>門片模擬系統 - 專業版</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
@@ -33,9 +32,6 @@
     <script type="text/babel">
         const { useState, useEffect, useRef, useMemo } = React;
 
-        // ==========================================================
-        // ★ 您的 Firebase Config ★
-        // ==========================================================
         const MY_FIREBASE_CONFIG = {
             apiKey: "AIzaSyD-I3XsPn77h4Vp6SYgZ5vhOZsovJBkhJk",
             authDomain: "artifacts-732a0.firebaseapp.com",
@@ -54,12 +50,10 @@
                 "8": { name: "摩卡", hex: "#4B3621" }, "9": { name: "灰橡", hex: "#8E8E8E" }
             },
             lineColors: { "G": { name: "灰線", hex: "#9ca3af" }, "B": { name: "黑線", hex: "#000000" }, "W": { name: "白線", hex: "#ffffff" } },
-            // ★ 修正：配件數量完整回歸
             glassFrames: [ { id: "GLS_G-01_467×725", name: "玻璃框 G-01" }, { id: "GLS_T_08_200×605", name: "玻璃框 T-08" }, { id: "GLS_T_09_370×605", name: "玻璃框 T-09" }, { id: "GLS_T_16_200×200", name: "玻璃框 T-16" }, { id: "GLS_T_17_250×950", name: "玻璃框 T-17" } ],
             louvers: [ { id: "LOU_A-03_378×230", name: "百頁 A-03" }, { id: "LOU_A-04_200×650", name: "百頁 A-04" }, { id: "LOU_A-05_400×650", name: "百頁 A-05" }, { id: "LOU_A-13_250×297", name: "百頁 A-13" } ],
             accColors: [ { id: "白", name: "白色", hex: "#FFFFFF" }, { id: "柚木", name: "柚木色", hex: "#966F33" }, { id: "胡桃", name: "胡桃色", hex: "#5D4037" } ],
-            potentialDesigns: ["110", "120", "122", "123", "125", "126", "141", "144", "150", "151", "152", "153", "305", "306", "307", "308", "309", "401", "501", "502", "503", "504", "601", "602", "605", "650", "651", "751", "752", "755", "760", "761", "762", "763", "764", "765", "780", "790", "791", "802", "880", "900", "01", "02", "04", "07", "08", "11", "14", "15", "16", "20", "30", "50", "51", "54", "58", "60", "61", "62", "63", "64", "65", "75", "76", "78", "79", "80", "87", "88", "90", "95", "100", "200", "201"],
-            specialSuffixes: ["-01", "-02", "-03", "-04", "-05", "-06", "-07", "-08", "-09"]
+            potentialDesigns: ["110", "120", "122", "123", "125", "126", "141", "144", "150", "151", "152", "153", "305", "306", "307", "308", "309", "401", "501", "502", "503", "504", "601", "602", "605", "650", "651", "751", "752", "755", "760", "761", "762", "763", "764", "765", "780", "790", "791", "802", "880", "900", "01", "02", "04", "07", "08", "11", "14", "15", "16", "20", "30", "50", "51", "54", "58", "60", "61", "62", "63", "64", "65", "75", "76", "78", "79", "80", "87", "88", "90", "95", "100", "200", "201"]
         };
 
         const App = () => {
@@ -67,7 +61,6 @@
             const [authKey, setAuthKey] = useState('');
             const [authError, setAuthError] = useState('');
             
-            // ★ UI 狀態：預設手機版收起選單，電腦版展開選單
             const [activeMenu, setActiveMenu] = useState(window.innerWidth < 768 ? null : 'designs'); 
             const [selection, setSelection] = useState({ design: '01', file: '0111.jpg', lineColor: '' });
             const [fabricCanvas, setFabricCanvas] = useState(null);
@@ -79,7 +72,12 @@
             const [isScanning, setIsScanning] = useState(false);
             const canvasContainerRef = useRef(null);
 
-            // 1. 金鑰驗證
+            // 確保型號數字由小到大排序
+            const sortedDesigns = useMemo(() => {
+                return [...CONFIG.potentialDesigns].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+            }, []);
+
+            // 金鑰驗證
             const checkKey = async (key) => {
                 const targetKey = key || authKey;
                 if (!targetKey) return;
@@ -102,7 +100,7 @@
                 if (saved) checkKey(saved);
             }, []);
 
-            // 2. 智能掃描 (★ 修復 151 特殊跳色偵測)
+            // 智能掃描：★ 完美抓取 15111-01.jpg 這類特殊檔案
             useEffect(() => {
                 if (!isAuthorized || !selection.design) return;
                 
@@ -110,36 +108,57 @@
                     setIsScanning(true);
                     const foundColors = new Set();
                     const foundLines = new Set();
-                    const colorPromises = [];
-                    const linePromises = [];
+                    const promises = [];
 
-                    // 掃描一般顏色
+                    const checkFile = async (folder, filename) => {
+                        try {
+                            const res = await fetch(`${folder}/${filename}`, { method: 'HEAD' });
+                            if (res.ok) {
+                                if (folder === 'doors') foundColors.add(filename);
+                                if (folder === 'lines') foundLines.add(filename);
+                            } else {
+                                // 支援大寫副檔名防呆
+                                const ext = filename.split('.').pop();
+                                if (ext === 'jpg' || ext === 'png') {
+                                    const upperExtFilename = filename.slice(0, -(ext.length)) + ext.toUpperCase();
+                                    const resUpper = await fetch(`${folder}/${upperExtFilename}`, { method: 'HEAD' });
+                                    if (resUpper.ok) {
+                                        if (folder === 'doors') foundColors.add(upperExtFilename);
+                                        if (folder === 'lines') foundLines.add(upperExtFilename);
+                                    }
+                                }
+                            }
+                        } catch (e) {}
+                    };
+
+                    const extendedSuffixes = ["-01", "-02", "-03", "-04", "-05", "-06", "-07", "-08", "-09", "-1", "-2", "-3", "-4", "-5", "A", "B", "C", "-A", "-B", "-C"];
+
+                    // 掃描一般款與組合跳色款
                     Object.keys(CONFIG.series).forEach(tId => {
                         Object.keys(CONFIG.colors).forEach(cId => {
-                            const file = `${selection.design}${tId}${cId}.jpg`;
-                            colorPromises.push(fetch(`doors/${file}`, { method: 'HEAD' }).then(res => { if (res.ok) foundColors.add(file); }).catch(() => {}));
+                            // 1. 一般款 (如: 15111.jpg)
+                            promises.push(checkFile('doors', `${selection.design}${tId}${cId}.jpg`));
+                            
+                            // 2. 特殊跳色組合款 (如: 15111-01.jpg) - ★ 修正此處
+                            extendedSuffixes.forEach(s => {
+                                promises.push(checkFile('doors', `${selection.design}${tId}${cId}${s}.jpg`));
+                                promises.push(checkFile('doors', `${selection.design}${tId}${cId}${s}.png`)); 
+                            });
                         });
-                    });
-
-                    // 掃描特殊跳色款 (如 151-01.jpg)
-                    CONFIG.specialSuffixes.forEach(s => {
-                        const file = `${selection.design}${s}.jpg`;
-                        colorPromises.push(fetch(`doors/${file}`, { method: 'HEAD' }).then(res => { if (res.ok) foundColors.add(file); }).catch(() => {}));
                     });
 
                     // 掃描線條
                     Object.keys(CONFIG.lineColors).forEach(lc => {
-                        const file = `${selection.design}_${lc}.png`;
-                        linePromises.push(fetch(`lines/${file}`, { method: 'HEAD' }).then(res => { if (res.ok) foundLines.add(file); }).catch(() => {}));
+                        promises.push(checkFile('lines', `${selection.design}_${lc}.png`));
                     });
 
-                    await Promise.all([...colorPromises, ...linePromises]);
+                    await Promise.all(promises);
                     setAvailableColors(foundColors);
                     setAvailableLines(foundLines);
                     
                     if (foundColors.size > 0 && !foundColors.has(selection.file)) {
-                        const firstAvailable = Array.from(foundColors).sort()[0];
-                        setSelection(prev => ({ ...prev, file: firstAvailable }));
+                        const sortedFound = Array.from(foundColors).sort();
+                        setSelection(prev => ({ ...prev, file: sortedFound[0] }));
                     }
                     setIsScanning(false);
                 };
@@ -147,11 +166,10 @@
                 scanDesignOptions();
             }, [selection.design, isAuthorized]);
 
-            // 3. 畫布初始化與視窗重設對齊
+            // 畫布初始化與視窗重設對齊
             useEffect(() => {
                 if (!isAuthorized || !canvasContainerRef.current) return;
                 
-                // 初次建立畫布
                 if (!fabricCanvas) {
                     const canvas = new fabric.Canvas('main-canvas', { 
                         width: canvasContainerRef.current.clientWidth, 
@@ -160,11 +178,10 @@
                         preserveObjectStacking: true 
                     });
                     
-                    // ★ 修正：點擊配件自動展開左側的刪除面板
                     canvas.on('selection:created', (e) => {
                         if (e.selected && e.selected[0] && e.selected[0].id?.startsWith('acc')) {
                             setSelectedAcc(e.selected[0]);
-                            setActiveMenu('acc'); // 強制展開配件修改選單
+                            setActiveMenu('acc'); 
                         }
                     });
                     canvas.on('selection:updated', (e) => {
@@ -179,7 +196,6 @@
                     return;
                 }
 
-                // 處理左側選單縮放時的「畫布寬度自動對齊」
                 const handleResize = () => {
                     if (fabricCanvas && canvasContainerRef.current) {
                         fabricCanvas.setWidth(canvasContainerRef.current.clientWidth);
@@ -187,7 +203,6 @@
                         
                         const door = fabricCanvas.getObjects().find(o => o.id === 'door');
                         if (door) {
-                            // ★ 修正：大幅提升門片比例至 95%
                             const newScale = Math.min((fabricCanvas.getWidth() * 0.95) / door.width, (fabricCanvas.getHeight() * 0.95) / door.height);
                             setDoorScale(newScale);
                             door.set({ scaleX: newScale, scaleY: newScale, left: fabricCanvas.getWidth()/2, top: fabricCanvas.getHeight()/2 });
@@ -209,12 +224,11 @@
                 };
 
                 window.addEventListener('resize', handleResize);
-                // 當側邊欄展開/收起時，延遲觸發對齊動畫
                 const timer = setTimeout(handleResize, 310);
                 return () => { window.removeEventListener('resize', handleResize); clearTimeout(timer); };
             }, [isAuthorized, fabricCanvas, activeMenu]);
 
-            // 4. 載入圖片邏輯
+            // 載入圖片邏輯
             useEffect(() => {
                 if (!fabricCanvas || !selection.file || isScanning) return;
                 
@@ -237,13 +251,21 @@
                     });
                     fabricCanvas.add(doorImg).sendToBack(doorImg);
 
-                    // 同步線條層
                     const linePath = `lines/${selection.design}_${selection.lineColor}.png`;
                     const existingLine = fabricCanvas.getObjects().find(o => o.id === 'lineLayer');
                     if (existingLine) fabricCanvas.remove(existingLine);
 
-                    if (selection.lineColor && availableLines.has(linePath.replace('lines/',''))) {
-                        fabric.Image.fromURL(linePath, (lineImg) => {
+                    const targetLineFile = `${selection.design}_${selection.lineColor}.png`;
+                    const upperTargetLineFile = `${selection.design}_${selection.lineColor}.PNG`;
+                    
+                    let actualLineFile = null;
+                    if (selection.lineColor) {
+                        if (availableLines.has(targetLineFile)) actualLineFile = targetLineFile;
+                        else if (availableLines.has(upperTargetLineFile)) actualLineFile = upperTargetLineFile;
+                    }
+
+                    if (actualLineFile) {
+                        fabric.Image.fromURL(`lines/${actualLineFile}`, (lineImg) => {
                             lineImg.set({ 
                                 scaleX: (doorImg.getScaledWidth()) / lineImg.width, 
                                 scaleY: (doorImg.getScaledHeight()) / lineImg.height, 
@@ -259,14 +281,14 @@
                 }, { crossOrigin: 'anonymous' });
             }, [selection, fabricCanvas, availableLines, isScanning]);
 
+            // ★ 過濾出檔名包含 '-' 的作為特殊組合跳色款
             const specialOptions = Array.from(availableColors).filter(f => f.includes('-'));
 
-            // ★ 補回遺失的下載圖片功能
+            // ★ 下載圖片功能
             const handleDownload = () => {
                 if (!fabricCanvas) return;
                 const link = document.createElement('a');
-                // 自動產生包含型號與線條的檔名
-                const fileName = `CY_${selection.design}_${selection.file.replace('.jpg', '')}_${selection.lineColor || '原色'}.png`;
+                const fileName = `CY_${selection.design}_${selection.file.split('.')[0]}_${selection.lineColor || '原色'}.png`;
                 link.download = fileName;
                 link.href = fabricCanvas.toDataURL({ format: 'png', multiplier: 2 });
                 link.click();
@@ -287,14 +309,12 @@
             return (
                 <div className="flex flex-col md:flex-row h-screen w-screen bg-slate-50 font-sans overflow-hidden">
                     
-                    {/* ★ 核心佈局：左側面板 (手機版45%滑出，電腦版固定320px) */}
                     <div className={`
                         absolute md:relative top-0 left-0 h-[calc(100vh-5rem)] md:h-full 
                         w-[45%] md:w-80 bg-white border-r border-slate-200 z-20 shadow-2xl md:shadow-none 
                         transition-all duration-300 flex flex-col shrink-0
                         ${activeMenu ? 'ml-0' : '-ml-[45%] md:ml-0'}
                     `}>
-                        {/* 頂部標籤區 (電腦版) / 關閉按鈕 (手機版) */}
                         <div className="hidden md:flex h-14 bg-slate-50 border-b border-slate-200 shrink-0">
                             <button onClick={()=>setActiveMenu('designs')} className={`flex-1 flex flex-col items-center justify-center transition-colors ${activeMenu==='designs'?'bg-white text-blue-600 border-b-2 border-blue-600':'text-slate-400 hover:bg-slate-100'}`}><span className="text-[12px] font-black">造型</span></button>
                             <button onClick={()=>setActiveMenu('colors')} className={`flex-1 flex flex-col items-center justify-center transition-colors ${activeMenu==='colors'?'bg-white text-blue-600 border-b-2 border-blue-600':'text-slate-400 hover:bg-slate-100'}`}><span className="text-[12px] font-black">顏色</span></button>
@@ -305,16 +325,15 @@
                             <button onClick={()=>setActiveMenu(null)} className="text-blue-400 font-bold text-lg leading-none">×</button>
                         </div>
 
-                        {/* 分頁內容 */}
                         <div className="flex-1 overflow-y-auto p-3 custom-scrollbar bg-slate-50/30 tab-content">
                             
                             {/* 1. 造型 */}
                             {activeMenu === 'designs' && (
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                    {CONFIG.potentialDesigns.map(id => (
+                                    {sortedDesigns.map(id => (
                                         <button key={id} onClick={()=>{
                                             setSelection({...selection, design:id}); 
-                                            setActiveMenu('colors'); // 手機版選完自動跳轉
+                                            setActiveMenu('colors'); 
                                         }} className={`py-3 border-2 rounded-xl text-[11px] font-black transition-all ${selection.design===id?'border-blue-500 bg-blue-50 text-blue-600 shadow-sm':'border-slate-200 bg-white hover:border-blue-200 text-slate-600'}`}>
                                             {id}
                                         </button>
@@ -322,7 +341,7 @@
                                 </div>
                             )}
 
-                            {/* 2. 顏色 (包含特殊跳色) */}
+                            {/* 2. 顏色 */}
                             {activeMenu === 'colors' && (
                                 <div className="flex flex-col gap-6 pb-6">
                                     {isScanning ? (
@@ -341,7 +360,8 @@
                                                             <div className="w-full h-1.5 bg-slate-200 rounded-full"></div><span className="text-[9px] font-bold text-slate-600">原樣</span>
                                                         </button>
                                                         {Object.entries(CONFIG.lineColors).map(([lc, d]) => {
-                                                            if (!availableLines.has(`${selection.design}_${lc}.png`)) return null;
+                                                            const hasLine = availableLines.has(`${selection.design}_${lc}.png`) || availableLines.has(`${selection.design}_${lc}.PNG`);
+                                                            if (!hasLine) return null;
                                                             return (
                                                                 <button key={lc} onClick={()=>setSelection({...selection, lineColor:lc})} className={`p-2 border-2 rounded-lg flex flex-col items-center gap-1 ${selection.lineColor===lc?'border-blue-500 bg-blue-50':'border-slate-100'}`}>
                                                                     <div className="w-full h-1.5 rounded-full border border-slate-200" style={{backgroundColor: d.hex}}></div><span className="text-[9px] font-bold text-slate-600">{d.name}</span>
@@ -353,14 +373,18 @@
                                             )}
                                             
                                             {Object.entries(CONFIG.series).map(([tId, tName]) => {
-                                                const seriesColors = Object.entries(CONFIG.colors).filter(([cId]) => availableColors.has(`${selection.design}${tId}${cId}.jpg`));
+                                                const seriesColors = Object.entries(CONFIG.colors).filter(([cId]) => {
+                                                    return availableColors.has(`${selection.design}${tId}${cId}.jpg`) || availableColors.has(`${selection.design}${tId}${cId}.JPG`);
+                                                });
                                                 if (seriesColors.length === 0) return null;
                                                 return (
                                                     <div key={tId}>
                                                         <p className="text-[10px] font-black text-slate-500 mb-2 border-l-2 border-slate-300 pl-1 uppercase">{tName}</p>
                                                         <div className="grid grid-cols-2 gap-2">
                                                             {seriesColors.map(([cId, c]) => {
-                                                                const fk = `${selection.design}${tId}${cId}.jpg`;
+                                                                let fk = `${selection.design}${tId}${cId}.jpg`;
+                                                                if (!availableColors.has(fk)) fk = `${selection.design}${tId}${cId}.JPG`;
+
                                                                 return (
                                                                     <button key={cId} onClick={()=>setSelection({...selection, file:fk})} className={`p-2 border-2 rounded-xl flex flex-col items-center gap-1 transition-all bg-white ${selection.file===fk?'border-rose-500 shadow-md ring-2 ring-rose-50':'border-slate-100 hover:border-slate-300'}`}>
                                                                         <div className="w-full aspect-square rounded-lg shadow-inner border border-slate-100" style={{backgroundColor: c.hex}}></div>
@@ -373,14 +397,14 @@
                                                 );
                                             })}
 
-                                            {/* ★ 修正：特殊跳色/組合款 (針對 151-01.jpg 等) */}
+                                            {/* ★ 特殊跳色組合款 */}
                                             {specialOptions.length > 0 && (
                                                 <div className="border-t border-slate-200 pt-4 mt-2">
-                                                    <p className="text-[10px] font-black text-amber-600 mb-2 border-l-2 border-amber-400 pl-1 uppercase">特殊組合款</p>
+                                                    <p className="text-[10px] font-black text-amber-600 mb-2 border-l-2 border-amber-400 pl-1 uppercase">特殊組合跳色</p>
                                                     <div className="flex flex-col gap-2">
                                                         {specialOptions.map(f => (
-                                                            <button key={f} onClick={()=>setSelection({...selection, file:f})} className={`p-3 border-2 rounded-xl text-[10px] font-black transition-all bg-white ${selection.file===f?'border-amber-500 bg-amber-50 text-amber-700 shadow-sm':'border-slate-200 text-slate-600'}`}>
-                                                                {f.replace('.jpg', '')}
+                                                            <button key={f} onClick={()=>setSelection({...selection, file:f})} className={`p-3 border-2 rounded-xl text-[10px] font-black transition-all bg-white ${selection.file===f?'border-amber-500 bg-amber-50 text-amber-700 shadow-sm':'border-slate-200 text-slate-600 hover:border-amber-200'}`}>
+                                                                {f.split('.')[0]}
                                                             </button>
                                                         ))}
                                                     </div>
@@ -391,7 +415,7 @@
                                 </div>
                             )}
 
-                            {/* 3. 配件 (加入刪除與換色) */}
+                            {/* 3. 配件 */}
                             {activeMenu === 'acc' && (
                                 <div className="flex flex-col gap-4 pb-6">
                                     {!selectedAcc ? (
@@ -400,7 +424,6 @@
                                             {CONFIG.glassFrames.concat(CONFIG.louvers).map(acc => (
                                                 <button key={acc.id} onClick={()=>{
                                                     fabric.Image.fromURL(`accessories/${acc.id}_白.png`, (img)=>{
-                                                        // ★ 修正：強制關閉調整大小功能 (hasControls: false)
                                                         img.set({ 
                                                             left: fabricCanvas.getWidth()/2, top: fabricCanvas.getHeight()/2, 
                                                             originX: 'center', originY: 'center', 
@@ -410,7 +433,7 @@
                                                             hasBorders: true, cornerColor: '#3b82f6', transparentCorners: false
                                                         });
                                                         fabricCanvas.add(img).setActiveObject(img).renderAll();
-                                                        setActiveMenu('acc'); // 切換到編輯狀態
+                                                        setActiveMenu('acc'); 
                                                     });
                                                 }} className="p-3 bg-white rounded-xl border-2 border-slate-200 flex items-center gap-3 active:scale-95 transition-transform hover:border-blue-300">
                                                     <div className="w-8 h-8 bg-blue-50 text-blue-500 rounded flex items-center justify-center font-black shadow-sm">+</div>
@@ -423,7 +446,6 @@
                                             <p className="text-[9px] text-blue-500 font-black mb-1 uppercase tracking-widest">正在編輯配件</p>
                                             <p className="text-xs font-black text-slate-800 mb-4 truncate">{selectedAcc.baseId}</p>
                                             
-                                            {/* ★ 修正：超明顯的刪除按鈕 */}
                                             <button onClick={()=>{
                                                 fabricCanvas.remove(selectedAcc); 
                                                 fabricCanvas.renderAll(); 
@@ -461,7 +483,6 @@
                         </div>
                     </div>
 
-                    {/* 右側 2/3 (或手機版滿版) 主體視圖 */}
                     <div className="flex-1 flex flex-col relative h-[calc(100vh-5rem)] md:h-full min-w-0">
                         <div className="h-14 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-4 z-10 shrink-0 shadow-sm">
                             <div className="flex flex-col">
@@ -475,19 +496,17 @@
                             </button>
                         </div>
 
-                        {/* 畫布容器 (自適應縮放核心) */}
                         <div className="flex-1 canvas-bg relative w-full h-full" ref={canvasContainerRef} dangerouslySetInnerHTML={{ __html: '<canvas id="main-canvas"></canvas>' }}></div>
                     </div>
 
-                    {/* ★ 手機版底部導航欄 (取代原本的頂部選單) */}
                     <div className="md:hidden absolute bottom-0 left-0 w-full h-20 bg-white border-t flex items-center justify-around z-30 shadow-[0_-5px_20px_rgba(0,0,0,0.05)] pb-4">
-                        <button onClick={()=>setActiveMenu(activeMenu==='designs'?null:'designs')} className={`nav-btn ${activeMenu==='designs'?'text-blue-600':'text-slate-400'}`}>
+                        <button onClick={()=>setActiveMenu(activeMenu==='designs'?null:'designs')} className={`nav-btn flex flex-col items-center justify-center flex-1 h-full gap-1 ${activeMenu==='designs'?'text-blue-600':'text-slate-400'}`}>
                             <div className="text-xl">🔲</div><span className="text-[10px] font-black uppercase tracking-widest">選造型</span>
                         </button>
-                        <button onClick={()=>setActiveMenu(activeMenu==='colors'?null:'colors')} className={`nav-btn ${activeMenu==='colors'?'text-blue-600':'text-slate-400'}`}>
+                        <button onClick={()=>setActiveMenu(activeMenu==='colors'?null:'colors')} className={`nav-btn flex flex-col items-center justify-center flex-1 h-full gap-1 ${activeMenu==='colors'?'text-blue-600':'text-slate-400'}`}>
                             <div className="text-xl">🎨</div><span className="text-[10px] font-black uppercase tracking-widest">板材色</span>
                         </button>
-                        <button onClick={()=>setActiveMenu(activeMenu==='acc'?null:'acc')} className={`nav-btn ${activeMenu==='acc'?'text-blue-600':'text-slate-400'}`}>
+                        <button onClick={()=>setActiveMenu(activeMenu==='acc'?null:'acc')} className={`nav-btn flex flex-col items-center justify-center flex-1 h-full gap-1 ${activeMenu==='acc'?'text-blue-600':'text-slate-400'}`}>
                             <div className="text-xl">⚙️</div><span className="text-[10px] font-black uppercase tracking-widest">加配件</span>
                         </button>
                     </div>
