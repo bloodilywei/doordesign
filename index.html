@@ -72,12 +72,10 @@
             const [isScanning, setIsScanning] = useState(false);
             const canvasContainerRef = useRef(null);
 
-            // 確保型號數字由小到大排序
             const sortedDesigns = useMemo(() => {
                 return [...CONFIG.potentialDesigns].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
             }, []);
 
-            // 金鑰驗證
             const checkKey = async (key) => {
                 const targetKey = key || authKey;
                 if (!targetKey) return;
@@ -100,7 +98,7 @@
                 if (saved) checkKey(saved);
             }, []);
 
-            // 智能掃描：★ 完美抓取 15111-01.jpg 這類特殊檔案
+            // ★ 智能掃描：加入防封鎖的「分批排隊機制」
             useEffect(() => {
                 if (!isAuthorized || !selection.design) return;
                 
@@ -108,7 +106,7 @@
                     setIsScanning(true);
                     const foundColors = new Set();
                     const foundLines = new Set();
-                    const promises = [];
+                    const scanTasks = []; // 將所有請求變成「任務清單」
 
                     const checkFile = async (folder, filename) => {
                         try {
@@ -117,7 +115,6 @@
                                 if (folder === 'doors') foundColors.add(filename);
                                 if (folder === 'lines') foundLines.add(filename);
                             } else {
-                                // 支援大寫副檔名防呆
                                 const ext = filename.split('.').pop();
                                 if (ext === 'jpg' || ext === 'png') {
                                     const upperExtFilename = filename.slice(0, -(ext.length)) + ext.toUpperCase();
@@ -131,28 +128,32 @@
                         } catch (e) {}
                     };
 
-                    const extendedSuffixes = ["-01", "-02", "-03", "-04", "-05", "-06", "-07", "-08", "-09", "-1", "-2", "-3", "-4", "-5", "A", "B", "C", "-A", "-B", "-C"];
+                    const extendedSuffixes = ["-01", "-02", "-03", "-04", "-05", "-06", "-07", "-08", "-09", "-1", "-2", "-3", "-4"];
 
-                    // 掃描一般款與組合跳色款
+                    // 將任務加入清單，先不執行
                     Object.keys(CONFIG.series).forEach(tId => {
                         Object.keys(CONFIG.colors).forEach(cId => {
-                            // 1. 一般款 (如: 15111.jpg)
-                            promises.push(checkFile('doors', `${selection.design}${tId}${cId}.jpg`));
-                            
-                            // 2. 特殊跳色組合款 (如: 15111-01.jpg) - ★ 修正此處
+                            scanTasks.push(() => checkFile('doors', `${selection.design}${tId}${cId}.jpg`));
                             extendedSuffixes.forEach(s => {
-                                promises.push(checkFile('doors', `${selection.design}${tId}${cId}${s}.jpg`));
-                                promises.push(checkFile('doors', `${selection.design}${tId}${cId}${s}.png`)); 
+                                scanTasks.push(() => checkFile('doors', `${selection.design}${tId}${cId}${s}.jpg`));
+                                scanTasks.push(() => checkFile('doors', `${selection.design}${tId}${cId}${s}.png`)); 
                             });
                         });
                     });
 
-                    // 掃描線條
                     Object.keys(CONFIG.lineColors).forEach(lc => {
-                        promises.push(checkFile('lines', `${selection.design}_${lc}.png`));
+                        scanTasks.push(() => checkFile('lines', `${selection.design}_${lc}.png`));
                     });
 
-                    await Promise.all(promises);
+                    // ★ 分批執行機制 (一次 15 個，休息 30 毫秒)
+                    const CHUNK_SIZE = 15;
+                    for (let i = 0; i < scanTasks.length; i += CHUNK_SIZE) {
+                        const chunk = scanTasks.slice(i, i + CHUNK_SIZE);
+                        await Promise.all(chunk.map(fn => fn()));
+                        // 稍微停頓，讓 GitHub 伺服器喘息，防止被當作攻擊
+                        await new Promise(resolve => setTimeout(resolve, 30)); 
+                    }
+
                     setAvailableColors(foundColors);
                     setAvailableLines(foundLines);
                     
@@ -281,10 +282,8 @@
                 }, { crossOrigin: 'anonymous' });
             }, [selection, fabricCanvas, availableLines, isScanning]);
 
-            // ★ 過濾出檔名包含 '-' 的作為特殊組合跳色款
             const specialOptions = Array.from(availableColors).filter(f => f.includes('-'));
 
-            // ★ 下載圖片功能
             const handleDownload = () => {
                 if (!fabricCanvas) return;
                 const link = document.createElement('a');
@@ -327,7 +326,6 @@
 
                         <div className="flex-1 overflow-y-auto p-3 custom-scrollbar bg-slate-50/30 tab-content">
                             
-                            {/* 1. 造型 */}
                             {activeMenu === 'designs' && (
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                                     {sortedDesigns.map(id => (
@@ -341,7 +339,6 @@
                                 </div>
                             )}
 
-                            {/* 2. 顏色 */}
                             {activeMenu === 'colors' && (
                                 <div className="flex flex-col gap-6 pb-6">
                                     {isScanning ? (
@@ -397,10 +394,9 @@
                                                 );
                                             })}
 
-                                            {/* ★ 特殊跳色組合款 */}
                                             {specialOptions.length > 0 && (
                                                 <div className="border-t border-slate-200 pt-4 mt-2">
-                                                    <p className="text-[10px] font-black text-amber-600 mb-2 border-l-2 border-amber-400 pl-1 uppercase">特殊組合跳色</p>
+                                                    <p className="text-[10px] font-black text-amber-600 mb-2 border-l-2 border-amber-400 pl-1 uppercase">特殊組合款</p>
                                                     <div className="flex flex-col gap-2">
                                                         {specialOptions.map(f => (
                                                             <button key={f} onClick={()=>setSelection({...selection, file:f})} className={`p-3 border-2 rounded-xl text-[10px] font-black transition-all bg-white ${selection.file===f?'border-amber-500 bg-amber-50 text-amber-700 shadow-sm':'border-slate-200 text-slate-600 hover:border-amber-200'}`}>
@@ -415,7 +411,6 @@
                                 </div>
                             )}
 
-                            {/* 3. 配件 */}
                             {activeMenu === 'acc' && (
                                 <div className="flex flex-col gap-4 pb-6">
                                     {!selectedAcc ? (
