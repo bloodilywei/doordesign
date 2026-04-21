@@ -2,7 +2,8 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <!-- ★ 修正：開放 maximum-scale=5.0 讓手機可以雙指放大縮小 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover">
     <title>門片模擬系統 - 專業版</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -18,12 +19,10 @@
     </script>
 
     <style>
-        body { background-color: #f8fafc; font-family: -apple-system, sans-serif; overflow: hidden; touch-action: manipulation; }
+        body { background-color: #f8fafc; font-family: -apple-system, sans-serif; overflow-x: hidden; touch-action: manipulation; }
         .canvas-bg { background-image: linear-gradient(45deg, #e5e7eb 25%, transparent 25%), linear-gradient(-45deg, #e5e7eb 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e5e7eb 75%), linear-gradient(-45deg, transparent 75%, #e5e7eb 75%); background-size: 16px 16px; }
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 4px; }
-        
-        /* 側邊欄動畫 */
         .tab-content { animation: fadeIn 0.3s ease; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
     </style>
@@ -55,11 +54,12 @@
                 "8": { name: "摩卡", hex: "#4B3621" }, "9": { name: "灰橡", hex: "#8E8E8E" }
             },
             lineColors: { "G": { name: "灰線", hex: "#9ca3af" }, "B": { name: "黑線", hex: "#000000" }, "W": { name: "白線", hex: "#ffffff" } },
-            glassFrames: [ { id: "GLS_G-01_467×725", name: "玻璃框 G-01" }, { id: "GLS_T_08_200×605", name: "玻璃框 T-08" }, { id: "GLS_T_09_370×605", name: "玻璃框 T-09" } ],
-            louvers: [ { id: "LOU_A-03_378×230", name: "百頁 A-03" }, { id: "LOU_A-04_200×650", name: "百頁 A-04" } ],
+            // ★ 修正：配件數量完整回歸
+            glassFrames: [ { id: "GLS_G-01_467×725", name: "玻璃框 G-01" }, { id: "GLS_T_08_200×605", name: "玻璃框 T-08" }, { id: "GLS_T_09_370×605", name: "玻璃框 T-09" }, { id: "GLS_T_16_200×200", name: "玻璃框 T-16" }, { id: "GLS_T_17_250×950", name: "玻璃框 T-17" } ],
+            louvers: [ { id: "LOU_A-03_378×230", name: "百頁 A-03" }, { id: "LOU_A-04_200×650", name: "百頁 A-04" }, { id: "LOU_A-05_400×650", name: "百頁 A-05" }, { id: "LOU_A-13_250×297", name: "百頁 A-13" } ],
             accColors: [ { id: "白", name: "白色", hex: "#FFFFFF" }, { id: "柚木", name: "柚木色", hex: "#966F33" }, { id: "胡桃", name: "胡桃色", hex: "#5D4037" } ],
-            // 將所有可能的型號先列出，免去全域掃描
-            potentialDesigns: ["110", "120", "122", "123", "125", "126", "141", "144", "150", "151", "152", "153", "305", "306", "307", "308", "309", "401", "501", "502", "503", "504", "601", "602", "605", "650", "651", "751", "752", "755", "760", "761", "762", "763", "764", "765", "780", "790", "791", "802", "880", "900", "01", "02", "04", "07", "08", "11", "14", "15", "16", "20", "30", "50", "51", "54", "58", "60", "61", "62", "63", "64", "65", "75", "76", "78", "79", "80", "87", "88", "90", "95", "100", "200", "201"]
+            potentialDesigns: ["110", "120", "122", "123", "125", "126", "141", "144", "150", "151", "152", "153", "305", "306", "307", "308", "309", "401", "501", "502", "503", "504", "601", "602", "605", "650", "651", "751", "752", "755", "760", "761", "762", "763", "764", "765", "780", "790", "791", "802", "880", "900", "01", "02", "04", "07", "08", "11", "14", "15", "16", "20", "30", "50", "51", "54", "58", "60", "61", "62", "63", "64", "65", "75", "76", "78", "79", "80", "87", "88", "90", "95", "100", "200", "201"],
+            specialSuffixes: ["-01", "-02", "-03", "-04", "-05", "-06", "-07", "-08", "-09"]
         };
 
         const App = () => {
@@ -67,13 +67,13 @@
             const [authKey, setAuthKey] = useState('');
             const [authError, setAuthError] = useState('');
             
-            const [activeTab, setActiveTab] = useState('designs'); // 'designs', 'colors', 'acc'
+            // ★ UI 狀態：預設手機版收起選單，電腦版展開選單
+            const [activeMenu, setActiveMenu] = useState(window.innerWidth < 768 ? null : 'designs'); 
             const [selection, setSelection] = useState({ design: '01', file: '0111.jpg', lineColor: '' });
             const [fabricCanvas, setFabricCanvas] = useState(null);
             const [selectedAcc, setSelectedAcc] = useState(null);
             const [doorScale, setDoorScale] = useState(1);
             
-            // ★ 局部掃描狀態 (解決流量卡死與自動篩選)
             const [availableColors, setAvailableColors] = useState(new Set());
             const [availableLines, setAvailableLines] = useState(new Set());
             const [isScanning, setIsScanning] = useState(false);
@@ -102,7 +102,7 @@
                 if (saved) checkKey(saved);
             }, []);
 
-            // 2. ★ 智能局部掃描：只掃描「當前選擇造型」的顏色 (極低流量，瞬間完成)
+            // 2. 智能掃描 (★ 修復 151 特殊跳色偵測)
             useEffect(() => {
                 if (!isAuthorized || !selection.design) return;
                 
@@ -113,83 +113,108 @@
                     const colorPromises = [];
                     const linePromises = [];
 
-                    // 掃描這個型號的顏色
+                    // 掃描一般顏色
                     Object.keys(CONFIG.series).forEach(tId => {
                         Object.keys(CONFIG.colors).forEach(cId => {
                             const file = `${selection.design}${tId}${cId}.jpg`;
-                            colorPromises.push(
-                                fetch(`doors/${file}`, { method: 'HEAD' })
-                                .then(res => { if (res.ok) foundColors.add(file); })
-                                .catch(() => {})
-                            );
+                            colorPromises.push(fetch(`doors/${file}`, { method: 'HEAD' }).then(res => { if (res.ok) foundColors.add(file); }).catch(() => {}));
                         });
                     });
 
-                    // 掃描這個型號的線條
+                    // 掃描特殊跳色款 (如 151-01.jpg)
+                    CONFIG.specialSuffixes.forEach(s => {
+                        const file = `${selection.design}${s}.jpg`;
+                        colorPromises.push(fetch(`doors/${file}`, { method: 'HEAD' }).then(res => { if (res.ok) foundColors.add(file); }).catch(() => {}));
+                    });
+
+                    // 掃描線條
                     Object.keys(CONFIG.lineColors).forEach(lc => {
                         const file = `${selection.design}_${lc}.png`;
-                        linePromises.push(
-                            fetch(`lines/${file}`, { method: 'HEAD' })
-                            .then(res => { if (res.ok) foundLines.add(file); })
-                            .catch(() => {})
-                        );
+                        linePromises.push(fetch(`lines/${file}`, { method: 'HEAD' }).then(res => { if (res.ok) foundLines.add(file); }).catch(() => {}));
                     });
 
                     await Promise.all([...colorPromises, ...linePromises]);
                     setAvailableColors(foundColors);
                     setAvailableLines(foundLines);
                     
-                    // 如果當前的 file 不在這個新搜尋的結果裡，自動跳到第一個可用的圖檔
                     if (foundColors.size > 0 && !foundColors.has(selection.file)) {
                         const firstAvailable = Array.from(foundColors).sort()[0];
                         setSelection(prev => ({ ...prev, file: firstAvailable }));
                     }
-                    
                     setIsScanning(false);
                 };
 
                 scanDesignOptions();
             }, [selection.design, isAuthorized]);
 
-            // 3. 初始化畫布 (精準填滿右側 2/3 空間)
+            // 3. 畫布初始化與視窗重設對齊
             useEffect(() => {
                 if (!isAuthorized || !canvasContainerRef.current) return;
-                const initCanvas = () => {
-                    if (fabricCanvas) fabricCanvas.dispose();
-                    const width = canvasContainerRef.current.clientWidth;
-                    const height = canvasContainerRef.current.clientHeight;
-                    
+                
+                // 初次建立畫布
+                if (!fabricCanvas) {
                     const canvas = new fabric.Canvas('main-canvas', { 
-                        width: width, 
-                        height: height, 
+                        width: canvasContainerRef.current.clientWidth, 
+                        height: canvasContainerRef.current.clientHeight, 
                         backgroundColor: 'transparent',
                         preserveObjectStacking: true 
                     });
                     
-                    // 點擊配件時自動切換到「配件分頁」方便刪除
+                    // ★ 修正：點擊配件自動展開左側的刪除面板
                     canvas.on('selection:created', (e) => {
-                        if (e.target && e.target.id && e.target.id.startsWith('acc')) {
-                            setSelectedAcc(e.target);
-                            setActiveTab('acc');
+                        if (e.selected && e.selected[0] && e.selected[0].id?.startsWith('acc')) {
+                            setSelectedAcc(e.selected[0]);
+                            setActiveMenu('acc'); // 強制展開配件修改選單
                         }
                     });
                     canvas.on('selection:updated', (e) => {
-                        if (e.target && e.target.id && e.target.id.startsWith('acc')) {
-                            setSelectedAcc(e.target);
+                        if (e.selected && e.selected[0] && e.selected[0].id?.startsWith('acc')) {
+                            setSelectedAcc(e.selected[0]);
+                            setActiveMenu('acc');
                         }
                     });
                     canvas.on('selection:cleared', () => setSelectedAcc(null));
                     
                     setFabricCanvas(canvas);
-                };
-                
-                initCanvas();
-                // 註冊視窗變更大小時重繪
-                window.addEventListener('resize', initCanvas);
-                return () => window.removeEventListener('resize', initCanvas);
-            }, [isAuthorized]);
+                    return;
+                }
 
-            // 4. 門片與配件比例同步繪製
+                // 處理左側選單縮放時的「畫布寬度自動對齊」
+                const handleResize = () => {
+                    if (fabricCanvas && canvasContainerRef.current) {
+                        fabricCanvas.setWidth(canvasContainerRef.current.clientWidth);
+                        fabricCanvas.setHeight(canvasContainerRef.current.clientHeight);
+                        
+                        const door = fabricCanvas.getObjects().find(o => o.id === 'door');
+                        if (door) {
+                            // ★ 修正：大幅提升門片比例至 95%
+                            const newScale = Math.min((fabricCanvas.getWidth() * 0.95) / door.width, (fabricCanvas.getHeight() * 0.95) / door.height);
+                            setDoorScale(newScale);
+                            door.set({ scaleX: newScale, scaleY: newScale, left: fabricCanvas.getWidth()/2, top: fabricCanvas.getHeight()/2 });
+                            
+                            const line = fabricCanvas.getObjects().find(o => o.id === 'lineLayer');
+                            if (line) {
+                                line.set({ scaleX: door.getScaledWidth() / line.width, scaleY: door.getScaledHeight() / line.height, left: door.left, top: door.top });
+                            }
+                            
+                            fabricCanvas.getObjects().forEach(obj => {
+                                if (obj.id?.startsWith('acc')) {
+                                    obj.set({ scaleX: newScale, scaleY: newScale });
+                                    obj.setCoords();
+                                }
+                            });
+                            fabricCanvas.requestRenderAll();
+                        }
+                    }
+                };
+
+                window.addEventListener('resize', handleResize);
+                // 當側邊欄展開/收起時，延遲觸發對齊動畫
+                const timer = setTimeout(handleResize, 310);
+                return () => { window.removeEventListener('resize', handleResize); clearTimeout(timer); };
+            }, [isAuthorized, fabricCanvas, activeMenu]);
+
+            // 4. 載入圖片邏輯
             useEffect(() => {
                 if (!fabricCanvas || !selection.file || isScanning) return;
                 
@@ -203,8 +228,7 @@
                     const existingDoor = fabricCanvas.getObjects().find(o => o.id === 'door');
                     if (existingDoor) fabricCanvas.remove(existingDoor);
 
-                    // 縮放演算法：讓門片佔據畫布高度的 85%
-                    const newScale = Math.min((canvasWidth * 0.9) / doorImg.width, (canvasHeight * 0.85) / doorImg.height);
+                    const newScale = Math.min((canvasWidth * 0.95) / doorImg.width, (canvasHeight * 0.95) / doorImg.height);
                     setDoorScale(newScale);
 
                     doorImg.set({ 
@@ -213,15 +237,7 @@
                     });
                     fabricCanvas.add(doorImg).sendToBack(doorImg);
 
-                    // 比例更新：強制刷新所有配件大小
-                    fabricCanvas.getObjects().forEach(obj => {
-                        if (obj.id && obj.id.startsWith('acc')) {
-                            obj.set({ scaleX: newScale, scaleY: newScale });
-                            obj.setCoords();
-                        }
-                    });
-
-                    // 同步線條
+                    // 同步線條層
                     const linePath = `lines/${selection.design}_${selection.lineColor}.png`;
                     const existingLine = fabricCanvas.getObjects().find(o => o.id === 'lineLayer');
                     if (existingLine) fabricCanvas.remove(existingLine);
@@ -235,7 +251,7 @@
                                 originX: 'center', originY: 'center', left: doorImg.left, top: doorImg.top 
                             });
                             fabricCanvas.add(lineImg);
-                            lineImg.moveTo(1); // 確保在門上面，配件下面
+                            lineImg.moveTo(1);
                             fabricCanvas.requestRenderAll();
                         });
                     }
@@ -243,22 +259,7 @@
                 }, { crossOrigin: 'anonymous' });
             }, [selection, fabricCanvas, availableLines, isScanning]);
 
-            // 5. 下載命名邏輯
-            const handleDownload = () => {
-                if (!fabricCanvas) return;
-                const tId = selection.file.length >= 4 ? selection.file.charAt(selection.file.length - 6) : '';
-                const cId = selection.file.length >= 4 ? selection.file.charAt(selection.file.length - 5) : '';
-                const seriesName = CONFIG.series[tId] || '';
-                const colorName = CONFIG.colors[cId]?.name || '';
-                const lineName = selection.lineColor ? CONFIG.lineColors[selection.lineColor].name : '無';
-                
-                const fileName = `CY_${selection.design}_${seriesName}${colorName}_${lineName}線.png`;
-                
-                const link = document.createElement('a');
-                link.download = fileName;
-                link.href = fabricCanvas.toDataURL({ format: 'png', multiplier: 2 });
-                link.click();
-            };
+            const specialOptions = Array.from(availableColors).filter(f => f.includes('-'));
 
             if (!isAuthorized) {
                 return (
@@ -273,33 +274,36 @@
             }
 
             return (
-                <div className="flex h-screen w-screen bg-slate-100 overflow-hidden font-sans">
+                <div className="flex flex-col md:flex-row h-screen w-screen bg-slate-50 font-sans overflow-hidden">
                     
-                    {/* 左側 1/3 控制面板 (手機 35%, 平板 300px) */}
-                    <div className="w-[36%] md:w-80 flex flex-col bg-white border-r border-slate-200 z-20 shadow-xl h-full shrink-0">
-                        {/* 分頁按鈕 */}
-                        <div className="flex h-14 bg-slate-50 border-b border-slate-200 shrink-0">
-                            <button onClick={()=>setActiveTab('designs')} className={`flex-1 flex flex-col items-center justify-center transition-colors ${activeTab==='designs'?'bg-white text-blue-600 border-b-2 border-blue-600':'text-slate-400 hover:bg-slate-100'}`}>
-                                <span className="text-[12px] font-black">造型</span>
-                            </button>
-                            <button onClick={()=>setActiveTab('colors')} className={`flex-1 flex flex-col items-center justify-center transition-colors ${activeTab==='colors'?'bg-white text-blue-600 border-b-2 border-blue-600':'text-slate-400 hover:bg-slate-100'}`}>
-                                <span className="text-[12px] font-black">顏色</span>
-                            </button>
-                            <button onClick={()=>setActiveTab('acc')} className={`flex-1 flex flex-col items-center justify-center transition-colors ${activeTab==='acc'?'bg-white text-blue-600 border-b-2 border-blue-600':'text-slate-400 hover:bg-slate-100'}`}>
-                                <span className="text-[12px] font-black">配件</span>
-                            </button>
+                    {/* ★ 核心佈局：左側面板 (手機版45%滑出，電腦版固定320px) */}
+                    <div className={`
+                        absolute md:relative top-0 left-0 h-[calc(100vh-5rem)] md:h-full 
+                        w-[45%] md:w-80 bg-white border-r border-slate-200 z-20 shadow-2xl md:shadow-none 
+                        transition-all duration-300 flex flex-col shrink-0
+                        ${activeMenu ? 'ml-0' : '-ml-[45%] md:ml-0'}
+                    `}>
+                        {/* 頂部標籤區 (電腦版) / 關閉按鈕 (手機版) */}
+                        <div className="hidden md:flex h-14 bg-slate-50 border-b border-slate-200 shrink-0">
+                            <button onClick={()=>setActiveMenu('designs')} className={`flex-1 flex flex-col items-center justify-center transition-colors ${activeMenu==='designs'?'bg-white text-blue-600 border-b-2 border-blue-600':'text-slate-400 hover:bg-slate-100'}`}><span className="text-[12px] font-black">造型</span></button>
+                            <button onClick={()=>setActiveMenu('colors')} className={`flex-1 flex flex-col items-center justify-center transition-colors ${activeMenu==='colors'?'bg-white text-blue-600 border-b-2 border-blue-600':'text-slate-400 hover:bg-slate-100'}`}><span className="text-[12px] font-black">顏色</span></button>
+                            <button onClick={()=>setActiveMenu('acc')} className={`flex-1 flex flex-col items-center justify-center transition-colors ${activeMenu==='acc'?'bg-white text-blue-600 border-b-2 border-blue-600':'text-slate-400 hover:bg-slate-100'}`}><span className="text-[12px] font-black">配件</span></button>
+                        </div>
+                        <div className="md:hidden flex h-12 bg-blue-50 border-b border-blue-100 items-center justify-between px-4 shrink-0">
+                            <span className="text-xs font-black text-blue-600 uppercase">{activeMenu === 'designs' ? '選擇造型' : activeMenu === 'colors' ? '板材/線條' : '配件飾面'}</span>
+                            <button onClick={()=>setActiveMenu(null)} className="text-blue-400 font-bold text-lg leading-none">×</button>
                         </div>
 
                         {/* 分頁內容 */}
-                        <div className="flex-1 overflow-y-auto p-3 custom-scrollbar bg-slate-50/50 tab-content">
+                        <div className="flex-1 overflow-y-auto p-3 custom-scrollbar bg-slate-50/30 tab-content">
                             
-                            {/* 1. 造型選擇 */}
-                            {activeTab === 'designs' && (
+                            {/* 1. 造型 */}
+                            {activeMenu === 'designs' && (
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                                     {CONFIG.potentialDesigns.map(id => (
                                         <button key={id} onClick={()=>{
-                                            setSelection({...selection, design:id}); // 點擊後會觸發掃描
-                                            setActiveTab('colors'); // 選完自動跳到顏色分頁
+                                            setSelection({...selection, design:id}); 
+                                            setActiveMenu('colors'); // 手機版選完自動跳轉
                                         }} className={`py-3 border-2 rounded-xl text-[11px] font-black transition-all ${selection.design===id?'border-blue-500 bg-blue-50 text-blue-600 shadow-sm':'border-slate-200 bg-white hover:border-blue-200 text-slate-600'}`}>
                                             {id}
                                         </button>
@@ -307,23 +311,21 @@
                                 </div>
                             )}
 
-                            {/* 2. 顏色選擇 (自動篩選版) */}
-                            {activeTab === 'colors' && (
+                            {/* 2. 顏色 (包含特殊跳色) */}
+                            {activeMenu === 'colors' && (
                                 <div className="flex flex-col gap-6 pb-6">
                                     {isScanning ? (
                                         <div className="flex flex-col items-center justify-center py-10 opacity-50">
-                                            <div className="w-6 h-6 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-2"></div>
-                                            <p className="text-[10px] font-bold text-blue-600">正在篩選可用板材...</p>
+                                            <div className="w-6 h-6 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-2"></div><p className="text-[10px] font-bold text-blue-600">讀取圖庫中...</p>
                                         </div>
                                     ) : availableColors.size === 0 ? (
-                                        <div className="text-center py-10 text-[10px] text-slate-400 font-bold border-2 border-dashed border-slate-200 rounded-xl mx-2">此造型暫無可用圖檔</div>
+                                        <div className="text-center py-10 text-[10px] text-slate-400 font-bold border-2 border-dashed border-slate-200 rounded-xl mx-2">無可用圖檔</div>
                                     ) : (
                                         <>
-                                            {/* 線條區 */}
                                             {availableLines.size > 0 && (
                                                 <div className="bg-white p-3 rounded-xl shadow-sm border border-slate-100">
-                                                    <p className="text-[10px] font-black text-slate-400 mb-2 border-l-2 border-blue-400 pl-1 uppercase">線條 (Line)</p>
-                                                    <div className="grid grid-cols-2 gap-2">
+                                                    <p className="text-[10px] font-black text-slate-400 mb-2 border-l-2 border-blue-400 pl-1 uppercase">線條顏色</p>
+                                                    <div className="grid grid-cols-1 gap-2">
                                                         <button onClick={()=>setSelection({...selection, lineColor:''})} className={`p-2 border-2 rounded-lg flex flex-col items-center gap-1 ${selection.lineColor===''?'border-blue-500 bg-blue-50':'border-slate-100'}`}>
                                                             <div className="w-full h-1.5 bg-slate-200 rounded-full"></div><span className="text-[9px] font-bold text-slate-600">原樣</span>
                                                         </button>
@@ -339,11 +341,9 @@
                                                 </div>
                                             )}
                                             
-                                            {/* 板材區 */}
                                             {Object.entries(CONFIG.series).map(([tId, tName]) => {
                                                 const seriesColors = Object.entries(CONFIG.colors).filter(([cId]) => availableColors.has(`${selection.design}${tId}${cId}.jpg`));
-                                                if (seriesColors.length === 0) return null; // 該系列無顏色則自動隱藏
-
+                                                if (seriesColors.length === 0) return null;
                                                 return (
                                                     <div key={tId}>
                                                         <p className="text-[10px] font-black text-slate-500 mb-2 border-l-2 border-slate-300 pl-1 uppercase">{tName}</p>
@@ -361,43 +361,58 @@
                                                     </div>
                                                 );
                                             })}
+
+                                            {/* ★ 修正：特殊跳色/組合款 (針對 151-01.jpg 等) */}
+                                            {specialOptions.length > 0 && (
+                                                <div className="border-t border-slate-200 pt-4 mt-2">
+                                                    <p className="text-[10px] font-black text-amber-600 mb-2 border-l-2 border-amber-400 pl-1 uppercase">特殊組合款</p>
+                                                    <div className="flex flex-col gap-2">
+                                                        {specialOptions.map(f => (
+                                                            <button key={f} onClick={()=>setSelection({...selection, file:f})} className={`p-3 border-2 rounded-xl text-[10px] font-black transition-all bg-white ${selection.file===f?'border-amber-500 bg-amber-50 text-amber-700 shadow-sm':'border-slate-200 text-slate-600'}`}>
+                                                                {f.replace('.jpg', '')}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
                                         </>
                                     )}
                                 </div>
                             )}
 
-                            {/* 3. 配件選擇 */}
-                            {activeTab === 'acc' && (
+                            {/* 3. 配件 (加入刪除與換色) */}
+                            {activeMenu === 'acc' && (
                                 <div className="flex flex-col gap-4 pb-6">
                                     {!selectedAcc ? (
                                         <>
-                                            <div className="bg-emerald-50 text-emerald-600 text-[10px] font-bold p-3 rounded-lg border border-emerald-100 mb-2 text-center">點擊下方配件加入門板</div>
+                                            <div className="bg-emerald-50 text-emerald-600 text-[10px] font-bold p-3 rounded-lg border border-emerald-100 mb-2 text-center">點擊加入畫布，或點選畫布上配件編輯</div>
                                             {CONFIG.glassFrames.concat(CONFIG.louvers).map(acc => (
                                                 <button key={acc.id} onClick={()=>{
                                                     fabric.Image.fromURL(`accessories/${acc.id}_白.png`, (img)=>{
-                                                        const canvasWidth = fabricCanvas.getWidth();
-                                                        const canvasHeight = fabricCanvas.getHeight();
+                                                        // ★ 修正：強制關閉調整大小功能 (hasControls: false)
                                                         img.set({ 
-                                                            left: canvasWidth/2, top: canvasHeight/2, 
+                                                            left: fabricCanvas.getWidth()/2, top: fabricCanvas.getHeight()/2, 
                                                             originX: 'center', originY: 'center', 
                                                             id: `acc-${Date.now()}`, baseId: acc.id, currentColor: "白", 
                                                             scaleX: doorScale, scaleY: doorScale, 
-                                                            hasControls: true, cornerColor: '#3b82f6', cornerSize: 24, padding: 5, transparentCorners: false
+                                                            hasControls: false, lockScalingX: true, lockScalingY: true, 
+                                                            hasBorders: true, cornerColor: '#3b82f6', transparentCorners: false
                                                         });
                                                         fabricCanvas.add(img).setActiveObject(img).renderAll();
+                                                        setActiveMenu('acc'); // 切換到編輯狀態
                                                     });
                                                 }} className="p-3 bg-white rounded-xl border-2 border-slate-200 flex items-center gap-3 active:scale-95 transition-transform hover:border-blue-300">
                                                     <div className="w-8 h-8 bg-blue-50 text-blue-500 rounded flex items-center justify-center font-black shadow-sm">+</div>
-                                                    <span className="text-[11px] font-black text-slate-700">{acc.name}</span>
+                                                    <span className="text-[10px] font-black text-slate-700">{acc.name}</span>
                                                 </button>
                                             ))}
                                         </>
                                     ) : (
                                         <div className="bg-white p-3 rounded-xl border-2 border-blue-200 shadow-sm animate-in fade-in slide-in-from-top-2">
-                                            <p className="text-[10px] text-blue-500 font-black mb-1">正在編輯</p>
+                                            <p className="text-[9px] text-blue-500 font-black mb-1 uppercase tracking-widest">正在編輯配件</p>
                                             <p className="text-xs font-black text-slate-800 mb-4 truncate">{selectedAcc.baseId}</p>
                                             
-                                            {/* 超大刪除按鈕 */}
+                                            {/* ★ 修正：超明顯的刪除按鈕 */}
                                             <button onClick={()=>{
                                                 fabricCanvas.remove(selectedAcc); 
                                                 fabricCanvas.renderAll(); 
@@ -415,7 +430,8 @@
                                                                 left: selectedAcc.left, top: selectedAcc.top, 
                                                                 scaleX: selectedAcc.scaleX, scaleY: selectedAcc.scaleY, 
                                                                 id: selectedAcc.id, baseId: selectedAcc.baseId, currentColor: c.id, 
-                                                                hasControls: true, cornerColor: '#3b82f6', cornerSize: 24, padding: 5, transparentCorners: false
+                                                                hasControls: false, lockScalingX: true, lockScalingY: true, 
+                                                                hasBorders: true, cornerColor: '#3b82f6', transparentCorners: false
                                                             });
                                                             fabricCanvas.remove(selectedAcc).add(newImg).setActiveObject(newImg).renderAll();
                                                             setSelectedAcc(newImg);
@@ -434,44 +450,46 @@
                         </div>
                     </div>
 
-                    {/* 右側 2/3 主體視圖 */}
-                    <div className="flex-1 flex flex-col relative h-full">
-                        {/* 頂部控制列 */}
+                    {/* 右側 2/3 (或手機版滿版) 主體視圖 */}
+                    <div className="flex-1 flex flex-col relative h-[calc(100vh-5rem)] md:h-full min-w-0">
                         <div className="h-14 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-4 z-10 shrink-0 shadow-sm">
                             <div className="flex flex-col">
-                                <span className="text-[9px] font-black text-slate-400 tracking-widest uppercase">Model Info</span>
+                                <span className="text-[9px] font-black text-slate-400 tracking-widest uppercase">Model Preview</span>
                                 <span className="text-[11px] font-black text-slate-800">
                                     {selection.design} {selection.lineColor ? `(${CONFIG.lineColors[selection.lineColor].name})` : ''}
                                 </span>
                             </div>
-                            <div className="flex gap-2">
-                                <button onClick={handleDownload} className="bg-slate-900 text-white px-4 py-2 rounded-lg text-[10px] font-black tracking-widest shadow-md active:scale-95 transition-transform uppercase flex items-center gap-1">
-                                    💾 保存
-                                </button>
-                            </div>
+                            <button onClick={handleDownload} className="bg-slate-900 text-white px-4 py-2 rounded-lg text-[10px] font-black tracking-widest shadow-md active:scale-95 transition-transform uppercase flex items-center gap-1">
+                                💾 下載圖檔
+                            </button>
                         </div>
 
-                        {/* 畫布容器 */}
+                        {/* 畫布容器 (自適應縮放核心) */}
                         <div className="flex-1 canvas-bg relative w-full h-full" ref={canvasContainerRef} dangerouslySetInnerHTML={{ __html: '<canvas id="main-canvas"></canvas>' }}></div>
-                        
-                        {/* 浮動提示 */}
-                        {selectedAcc && (
-                            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-slate-900/80 text-white px-4 py-2 rounded-full text-[10px] font-bold backdrop-blur-sm pointer-events-none whitespace-nowrap shadow-xl">
-                                👈 請在左側面板編輯或刪除配件
-                            </div>
-                        )}
+                    </div>
+
+                    {/* ★ 手機版底部導航欄 (取代原本的頂部選單) */}
+                    <div className="md:hidden absolute bottom-0 left-0 w-full h-20 bg-white border-t flex items-center justify-around z-30 shadow-[0_-5px_20px_rgba(0,0,0,0.05)] pb-4">
+                        <button onClick={()=>setActiveMenu(activeMenu==='designs'?null:'designs')} className={`nav-btn ${activeMenu==='designs'?'text-blue-600':'text-slate-400'}`}>
+                            <div className="text-xl">🔲</div><span className="text-[10px] font-black uppercase tracking-widest">選造型</span>
+                        </button>
+                        <button onClick={()=>setActiveMenu(activeMenu==='colors'?null:'colors')} className={`nav-btn ${activeMenu==='colors'?'text-blue-600':'text-slate-400'}`}>
+                            <div className="text-xl">🎨</div><span className="text-[10px] font-black uppercase tracking-widest">板材色</span>
+                        </button>
+                        <button onClick={()=>setActiveMenu(activeMenu==='acc'?null:'acc')} className={`nav-btn ${activeMenu==='acc'?'text-blue-600':'text-slate-400'}`}>
+                            <div className="text-xl">⚙️</div><span className="text-[10px] font-black uppercase tracking-widest">加配件</span>
+                        </button>
                     </div>
 
                 </div>
             );
         };
 
-        // 防白畫面保護器
         class ErrorBoundary extends React.Component {
             constructor(props) { super(props); this.state = { hasError: false, errMsg: '' }; }
             static getDerivedStateFromError(error) { return { hasError: true, errMsg: error.message }; }
             render() {
-                if (this.state.hasError) return <div className="p-8 text-rose-600 font-bold bg-rose-50 h-screen w-screen">系統發生錯誤：<br/>{this.state.errMsg}</div>;
+                if (this.state.hasError) return <div className="p-8 text-rose-600 font-bold bg-rose-50 h-screen w-screen">系統崩潰保護：<br/>{this.state.errMsg}</div>;
                 return this.props.children;
             }
         }
