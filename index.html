@@ -90,18 +90,14 @@
             const isLocalEnv = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
             const imgFetchOptions = isLocalEnv ? {} : { crossOrigin: 'anonymous' };
 
-            // =========================================================
-            // ★ 核心修復：由長到短精準鎖定，拒絕 751 的圖被 75 偷走
-            // =========================================================
+            // ★ 由長到短精準鎖定邏輯 (不受快取刪除影響)
             const validDesigns = useMemo(() => {
                 const allDesigns = [...CONFIG.potentialDesigns].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
                 
-                // 如果 API 沒有拿到檔案，本機就顯示全部，雲端不該發生
                 if (!isCloudFiltered || cloudFiles.doors.length === 0) return allDesigns; 
                 
                 const validSet = new Set();
                 const seriesKeys = Object.keys(CONFIG.series);
-                // 秘訣：將型號由長排到短 (如 751 排在 75 前面)
                 const allDesignsByLength = [...allDesigns].sort((a, b) => b.length - a.length);
                 
                 cloudFiles.doors.forEach(file => {
@@ -109,14 +105,13 @@
                     for (const d of allDesignsByLength) {
                         const dLower = d.toLowerCase();
                         if (lowerFile.startsWith(dLower)) {
-                            // 擷取型號後面的剩餘字串 (例如 75111.jpg 切掉 751 剩下 11.jpg)
                             const remainder = lowerFile.substring(dLower.length);
                             const nextChar = remainder.charAt(0);
                             
                             // 嚴格判斷：後面緊接的字元必須是 1,2,3,5,6 (系列號) 或是 - (特殊款) 或是副檔名的 .
                             if (seriesKeys.includes(nextChar) || nextChar === '-' || nextChar === '.' || /^[a-c]$/i.test(nextChar)) {
                                 validSet.add(d);
-                                break; // 該圖檔已找到最長且精確的主人，立刻停止比對，防止 75 搶走
+                                break; 
                             }
                         }
                     }
@@ -145,10 +140,11 @@
                 }
             };
 
-            const fetchRepoTree = async () => {
+            // ★ 堅不可摧快取機制：API 失敗時保留舊快取，絕不掉空！
+            const fetchRepoTree = async (forceRefresh = false) => {
                 setIsScanning(true);
-                const cacheKey = 'github_repo_tree_v11'; 
-                const cacheTimeKey = 'github_repo_tree_time_v11';
+                const cacheKey = 'github_repo_tree_v12'; 
+                const cacheTimeKey = 'github_repo_tree_time_v12';
                 
                 try {
                     if (isLocalEnv) {
@@ -159,7 +155,9 @@
 
                     const cached = localStorage.getItem(cacheKey);
                     const cachedTime = localStorage.getItem(cacheTimeKey);
-                    if (cached && cachedTime && (Date.now() - parseInt(cachedTime) < 86400000)) {
+                    
+                    // 如果不是強制刷新，且快取有效，直接使用
+                    if (!forceRefresh && cached && cachedTime && (Date.now() - parseInt(cachedTime) < 86400000)) {
                         setCloudFiles(JSON.parse(cached));
                         setIsCloudFiltered(true);
                         setIsScanning(false);
@@ -186,13 +184,32 @@
                         const filesObj = { doors, lines };
                         setCloudFiles(filesObj);
                         setIsCloudFiltered(true);
+                        // 成功後才寫入新快取
                         localStorage.setItem(cacheKey, JSON.stringify(filesObj));
                         localStorage.setItem(cacheTimeKey, Date.now().toString());
+                        if (forceRefresh) {
+                            setToastMsg('圖庫目錄已成功更新！');
+                            setTimeout(() => setToastMsg(''), 3000);
+                        }
+                    } else {
+                        // API 限制：如果有舊快取，拿出來擋著用！
+                        if (cached) {
+                            setCloudFiles(JSON.parse(cached));
+                            setIsCloudFiltered(true);
+                            setToastMsg('API 連線受限，已恢復使用您的舊版暫存目錄');
+                            setTimeout(() => setToastMsg(''), 4000);
+                        } else {
+                            setIsCloudFiltered(false);
+                        }
+                    }
+                } catch (e) {
+                    const cached = localStorage.getItem(cacheKey);
+                    if (cached) {
+                        setCloudFiles(JSON.parse(cached));
+                        setIsCloudFiltered(true);
                     } else {
                         setIsCloudFiltered(false);
                     }
-                } catch (e) {
-                    setIsCloudFiltered(false);
                 } finally {
                     setIsScanning(false);
                 }
@@ -202,6 +219,11 @@
                 if (!isAuthorized) return;
                 fetchRepoTree();
             }, [isAuthorized]);
+
+            // 強制刷新：告訴 fetchRepoTree 要去要新資料
+            const handleRefreshCache = () => {
+                fetchRepoTree(true); 
+            };
 
             useEffect(() => {
                 if (!isAuthorized || isCloudFiltered || !selection.design) return;
@@ -264,7 +286,6 @@
                 return Array.from(localValidFiles).some(f => f.toLowerCase() === lower);
             };
 
-            // ★ 特殊組合款：一樣套用嚴格由長到短的比對邏輯
             const specialOptions = useMemo(() => {
                 const valid = [];
                 const designLower = selection.design.toLowerCase();
@@ -280,9 +301,7 @@
                                 const remainder = lowerFile.substring(d.length);
                                 const nextChar = remainder.charAt(0);
                                 if (seriesKeys.includes(nextChar) || nextChar === '-') {
-                                    if (d === selection.design) {
-                                        valid.push(f);
-                                    }
+                                    if (d === selection.design) valid.push(f);
                                     break; 
                                 }
                             }
@@ -325,14 +344,6 @@
                 }
             }, [currentDesignFiles, selection.file]);
 
-            const handleRefreshCache = () => {
-                localStorage.removeItem('github_repo_tree_v11');
-                localStorage.removeItem('github_repo_tree_time_v11');
-                fetchRepoTree();
-                setToastMsg('圖庫目錄已強制更新！');
-                setTimeout(() => setToastMsg(''), 3000);
-            };
-
             const loadImageSafe = (url) => {
                 return new Promise((resolve, reject) => {
                     const img = new window.Image();
@@ -343,6 +354,7 @@
                 });
             };
 
+            // 畫布初始化
             useEffect(() => {
                 if (!isAuthorized || !canvasContainerRef.current) return;
                 if (!fabricCanvas) {
@@ -376,6 +388,7 @@
                             const newScale = Math.min((cw * 0.95) / door.width, (ch * 0.95) / door.height);
                             setDoorScale(newScale);
                             door.set({ scaleX: newScale, scaleY: newScale, left: cw/2, top: ch/2 });
+                            // ★ 確保線條縮放比例跟門片完全吻合
                             const line = fabricCanvas.getObjects().find(o => o.id === 'lineLayer');
                             if (line && line.width) line.set({ scaleX: (door.width * newScale) / line.width, scaleY: (door.height * newScale) / line.height, left: cw / 2, top: ch / 2 });
                             fabricCanvas.getObjects().forEach(obj => {
@@ -390,6 +403,7 @@
                 return () => { window.removeEventListener('resize', handleResize); clearTimeout(timer); };
             }, [isAuthorized, fabricCanvas, activeMenu]);
 
+            // 強韌繪圖引擎
             useEffect(() => {
                 if (!fabricCanvas || !selection.file) return;
                 
@@ -433,6 +447,7 @@
                                 const lineHtmlImg = await loadImageSafe(`lines/${targetLineFile}`);
                                 const lineImg = new fabric.Image(lineHtmlImg);
                                 lineImg.set({ 
+                                    // ★ 確保初始繪製時，線條拉伸比例符合門片
                                     scaleX: (doorImg.width * newScale) / lineImg.width, 
                                     scaleY: (doorImg.height * newScale) / lineImg.height, 
                                     selectable: false, id: 'lineLayer', evented: false, 
@@ -690,7 +705,7 @@
                                 <button onClick={handleRefreshCache} className="bg-slate-100 text-slate-600 px-3 py-2.5 rounded-xl text-[12px] font-black shadow-sm hover:bg-slate-200 active:scale-95 transition-all">
                                     🔄 刷新目錄
                                 </button>
-                                <button onClick={handleDownload} className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-5 py-2.5 rounded-xl text-[12px] font-black tracking-widest shadow-[0_4px_15px_rgba(59,130,246,0.4)] hover:shadow-[0_6px_20px_rgba(59,130,246,0.6)] hover:-translate-y-0.5 active:scale-95 transition-all uppercase items-center gap-2 border border-blue-400 hidden md:flex">
+                                <button onClick={handleDownload} className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-5 py-2.5 rounded-xl text-[12px] font-black tracking-widest shadow-[0_4px_15px_rgba(59,130,246,0.4)] hover:shadow-[0_6px_20px_rgba(59,130,246,0.6)] hover:-translate-y-0.5 active:scale-95 transition-all uppercase hidden md:flex items-center gap-2 border border-blue-400">
                                     📥 儲存圖檔
                                 </button>
                             </div>
@@ -701,6 +716,7 @@
                         </div>
                     </div>
 
+                    {/* ★ 手機版下方導覽列與下載按鈕 */}
                     <div className="md:hidden absolute bottom-0 left-0 w-full h-20 bg-white border-t flex items-center justify-around z-30 shadow-[0_-5px_20px_rgba(0,0,0,0.05)] pb-4 px-2">
                         <button onClick={()=>setActiveMenu(activeMenu==='designs'?null:'designs')} className={`nav-btn flex flex-col items-center justify-center flex-1 h-full gap-1 ${activeMenu==='designs'?'text-blue-600':'text-slate-400'}`}>
                             <div className="text-xl">🔲</div><span className="text-[10px] font-black uppercase tracking-widest">選造型</span>
