@@ -86,31 +86,20 @@
             const [isLocalScanning, setIsLocalScanning] = useState(false);
             
             const canvasContainerRef = useRef(null);
-
             const isLocalEnv = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-            const imgFetchOptions = isLocalEnv ? {} : { crossOrigin: 'anonymous' };
 
-            // =========================================================
-            // ★ 核心優化：本機與雲端統一過濾，沒有圖檔就絕對不顯示按鈕
-            // =========================================================
+            // ★ 完美過濾機制：精準判斷造型與從屬關係
             const validDesigns = useMemo(() => {
                 const allDesigns = [...CONFIG.potentialDesigns].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
                 
-                // 決定要用雲端目錄還是本機目錄來過濾
-                let sourceFiles = [];
-                if (isCloudFiltered && cloudFiles.doors.length > 0) {
-                    sourceFiles = cloudFiles.doors;
-                } else if (localValidFiles.size > 0) {
-                    sourceFiles = Array.from(localValidFiles);
-                } else {
-                    return []; // 如果都還沒掃描到，就顯示空清單
-                }
+                // 如果 API 被擋，且本機也沒有資源，退回盲選模式顯示全部，交給本機點擊後掃描
+                if (!isCloudFiltered || cloudFiles.doors.length === 0) return allDesigns; 
                 
                 const validSet = new Set();
                 const seriesKeys = Object.keys(CONFIG.series);
                 const allDesignsByLength = [...allDesigns].sort((a, b) => b.length - a.length);
                 
-                sourceFiles.forEach(file => {
+                cloudFiles.doors.forEach(file => {
                     const lowerFile = file.toLowerCase();
                     for (const d of allDesignsByLength) {
                         const dLower = d.toLowerCase();
@@ -127,41 +116,41 @@
                 });
                 
                 return allDesigns.filter(d => validSet.has(d));
-            }, [isCloudFiltered, cloudFiles, localValidFiles]);
+            }, [isCloudFiltered, cloudFiles]);
 
-            const checkKey = async (key) => {
-                const targetKey = key || authKey;
-                if (!targetKey) return;
+            // ★ 修正 1：移除所有 LocalStorage 的密碼紀錄，保證每次重新整理都要輸入
+            const handleCheckKey = async () => {
+                if (!authKey) return;
                 setAuthError('驗證中...');
                 try {
                     const app = FB.getApps().length === 0 ? FB.initializeApp(MY_FIREBASE_CONFIG) : FB.getApp();
                     const db = FB.getFirestore(app);
                     await FB.signInAnonymously(FB.getAuth(app));
                     const snapshot = await FB.getDocs(FB.collection(db, 'artifacts', 'default-app-id', 'public', 'data', 'access_keys'));
-                    const matched = snapshot.docs.map(d=>d.data()).find(k=>k.key===targetKey.toUpperCase());
+                    const matched = snapshot.docs.map(d=>d.data()).find(k=>k.key===authKey.toUpperCase());
+                    
                     if (matched && new Date(matched.expiresAt) > new Date()) {
                         setIsAuthorized(true);
-                        localStorage.setItem('cached_key', matched.key);
-                    } else setAuthError("密碼錯誤或已過期");
-                } catch (e) { setAuthError("連線失敗，請檢查網路"); }
+                        // 不再寫入 LocalStorage
+                    } else {
+                        setAuthError("密碼錯誤或已過期");
+                    }
+                } catch (e) { 
+                    setAuthError("連線失敗，請檢查網路"); 
+                }
             };
-
-            useEffect(() => {
-                const saved = localStorage.getItem('cached_key');
-                if (saved) checkKey(saved);
-            }, []);
 
             // 1. 同步 GitHub 目錄 
             const fetchRepoTree = async () => {
                 setIsScanning(true);
-                const cacheKey = 'github_repo_tree_v8'; 
-                const cacheTimeKey = 'github_repo_tree_time_v8';
+                const cacheKey = 'github_repo_tree_v10'; 
+                const cacheTimeKey = 'github_repo_tree_time_v10';
                 
                 try {
                     if (isLocalEnv) {
                         setIsCloudFiltered(false);
                         setIsScanning(false);
-                        return; // 本機交給備用防線處理
+                        return;
                     }
 
                     const cached = localStorage.getItem(cacheKey);
@@ -210,9 +199,9 @@
                 fetchRepoTree();
             }, [isAuthorized]);
 
-            // 2. 本機掃描防線：不管在哪，都會去找出實際存在的檔案
+            // 2. 本機備用防線掃描
             useEffect(() => {
-                if (!isAuthorized || isCloudFiltered) return;
+                if (!isAuthorized || isCloudFiltered || !selection.design) return;
                 
                 const scanLocalFallback = async () => {
                     setIsLocalScanning(true);
@@ -220,64 +209,117 @@
                     const check = async (folder, file) => {
                         try {
                             const res = await fetch(`${folder}/${file}`, { method: 'HEAD' });
-                            if (res.ok) found.add(file.toLowerCase());
+                            if (res.ok) found.add(file); // 記錄精準大小寫
+                            else {
+                                const ext = file.split('.').pop();
+                                if (ext === 'jpg' || ext === 'png') {
+                                    const upper = file.slice(0, -ext.length) + ext.toUpperCase();
+                                    const r2 = await fetch(`${folder}/${upper}`, { method: 'HEAD' });
+                                    if (r2.ok) found.add(upper);
+                                }
+                            }
                         } catch(e) {}
                     };
 
                     const tasks = [];
-                    // 全面掃描有列在配置檔裡的門片
-                    CONFIG.potentialDesigns.forEach(design => {
-                        Object.keys(CONFIG.series).forEach(tId => {
-                            Object.keys(CONFIG.colors).forEach(cId => {
-                                tasks.push(() => check('doors', `${design}${tId}${cId}.jpg`));
-                                tasks.push(() => check('doors', `${design}${tId}${cId}.png`));
-                                ["-01", "-02", "-03", "A", "B"].forEach(s => {
-                                    tasks.push(() => check('doors', `${design}${tId}${cId}${s}.jpg`));
-                                });
+                    Object.keys(CONFIG.series).forEach(tId => {
+                        Object.keys(CONFIG.colors).forEach(cId => {
+                            tasks.push(() => check('doors', `${selection.design}${tId}${cId}.jpg`));
+                            tasks.push(() => check('doors', `${selection.design}${tId}${cId}.png`));
+                            ["-01", "-02", "-03", "-04", "-05", "A", "B", "C"].forEach(s => {
+                                tasks.push(() => check('doors', `${selection.design}${tId}${cId}${s}.jpg`));
+                                tasks.push(() => check('doors', `${selection.design}${tId}${cId}${s}.png`));
                             });
                         });
-                        Object.keys(CONFIG.lineColors).forEach(lc => {
-                            tasks.push(() => check('lines', `${design}_${lc}.png`));
-                        });
+                    });
+                    Object.keys(CONFIG.lineColors).forEach(lc => {
+                        tasks.push(() => check('lines', `${selection.design}_${lc}.png`));
                     });
 
-                    // 批次執行
-                    const CHUNK_SIZE = 30;
+                    const CHUNK_SIZE = 15;
                     for (let i = 0; i < tasks.length; i += CHUNK_SIZE) {
                         const chunk = tasks.slice(i, i + CHUNK_SIZE);
                         await Promise.all(chunk.map(t => t()));
-                        // 同步更新已找到的清單，讓畫面按鈕能漸進式出現
-                        setLocalValidFiles(new Set(found));
+                        await new Promise(r => setTimeout(r, 30));
                     }
+                    
+                    setLocalValidFiles(found);
                     setIsLocalScanning(false);
                 };
                 scanLocalFallback();
-            }, [isCloudFiltered, isAuthorized]);
+            }, [selection.design, isCloudFiltered, isAuthorized]);
 
-            const hasDoorFile = (filename) => {
-                const lower = filename.toLowerCase();
-                if (isCloudFiltered) return cloudFiles.doors.some(f => f.toLowerCase() === lower);
-                return localValidFiles.has(lower);
-            };
-            
-            const hasLineFile = (filename) => {
-                const lower = filename.toLowerCase();
-                if (isCloudFiltered) return cloudFiles.lines.some(f => f.toLowerCase() === lower);
-                return localValidFiles.has(lower);
-            };
+            // ★ 修正 2：特殊組合款的過濾邏輯升級，防止 751 的圖檔出現在 75 裡面
+            const specialOptions = useMemo(() => {
+                const valid = [];
+                const designLower = selection.design.toLowerCase();
+                const sourceFiles = isCloudFiltered ? cloudFiles.doors : Array.from(localValidFiles);
+                
+                sourceFiles.forEach(f => {
+                    if (f.toLowerCase().startsWith(designLower) && f.includes('-')) {
+                        valid.push(f);
+                    }
+                });
+                
+                const allDesignsByLength = [...CONFIG.potentialDesigns].sort((a, b) => b.length - a.length);
+                return valid.filter(f => {
+                    const lowerFile = f.toLowerCase();
+                    for (const d of allDesignsByLength) {
+                        if (lowerFile.startsWith(d.toLowerCase())) {
+                            return d === selection.design; 
+                        }
+                    }
+                    return false;
+                });
+            }, [isCloudFiltered, cloudFiles.doors, localValidFiles, selection.design]);
+
+            // ★ 修正 3：自動導航機制！切換造型時，自動找出該造型「第一張有圖的顏色」，防止殘留舊檔名導致白畫面崩潰
+            const currentDesignFiles = useMemo(() => {
+                const valid = [];
+                const extendedSuffixes = ["", "-01", "-02", "-03", "-04", "-05", "A", "B", "C"];
+
+                Object.keys(CONFIG.series).forEach(tId => {
+                    Object.keys(CONFIG.colors).forEach(cId => {
+                        const base = `${selection.design}${tId}${cId}`;
+                        extendedSuffixes.forEach(s => {
+                            const targetBase = `${base}${s}`;
+                            if (isCloudFiltered) {
+                                const match = cloudFiles.doors.find(f => f.toLowerCase() === `${targetBase}.jpg`.toLowerCase() || f.toLowerCase() === `${targetBase}.png`.toLowerCase());
+                                if (match) valid.push(match);
+                            } else {
+                                const match = Array.from(localValidFiles).find(f => f.toLowerCase() === `${targetBase}.jpg`.toLowerCase() || f.toLowerCase() === `${targetBase}.png`.toLowerCase());
+                                if (match) valid.push(match);
+                            }
+                        });
+                    });
+                });
+                specialOptions.forEach(f => { if (!valid.includes(f)) valid.push(f); });
+                return valid;
+            }, [selection.design, isCloudFiltered, cloudFiles.doors, localValidFiles, specialOptions]);
+
+            useEffect(() => {
+                if (currentDesignFiles.length > 0) {
+                    const currentLower = selection.file.toLowerCase();
+                    const isCurrentValid = currentDesignFiles.some(f => f.toLowerCase() === currentLower);
+                    if (!isCurrentValid) {
+                        // 舊檔案不適用於新造型，立刻自動切換成合法的新檔案！
+                        setSelection(prev => ({ ...prev, file: currentDesignFiles[0] }));
+                    }
+                }
+            }, [currentDesignFiles, selection.file]);
 
             const handleRefreshCache = () => {
-                localStorage.removeItem('github_repo_tree_v8');
-                localStorage.removeItem('github_repo_tree_time_v8');
+                localStorage.removeItem('github_repo_tree_v10');
+                localStorage.removeItem('github_repo_tree_time_v10');
                 fetchRepoTree();
                 setToastMsg('圖庫目錄已強制更新！');
                 setTimeout(() => setToastMsg(''), 3000);
             };
 
+            // ★ 修正 4：拔除所有 crossOrigin 設定，同網域下絕對不被阻擋！
             const loadImageSafe = (url) => {
                 return new Promise((resolve, reject) => {
                     const img = new window.Image();
-                    if (!isLocalEnv) img.crossOrigin = 'anonymous'; 
                     img.onload = () => resolve(img);
                     img.onerror = () => reject(new Error(`無法載入圖片: ${url}`));
                     img.src = url;
@@ -367,7 +409,11 @@
                             if (isCloudFiltered) {
                                 const match = cloudFiles.lines.find(f => f.toLowerCase() === targetLineFile.toLowerCase());
                                 if (match) targetLineFile = match;
+                            } else {
+                                const match = Array.from(localValidFiles).find(f => f.toLowerCase() === targetLineFile.toLowerCase());
+                                if (match) targetLineFile = match;
                             }
+                            
                             try {
                                 const lineHtmlImg = await loadImageSafe(`lines/${targetLineFile}`);
                                 const lineImg = new fabric.Image(lineHtmlImg);
@@ -401,16 +447,7 @@
                 };
 
                 drawCanvas();
-            }, [selection, fabricCanvas, isLocalEnv, isCloudFiltered, cloudFiles]);
-
-            const getSpecialOptions = () => {
-                if (isCloudFiltered) {
-                    return cloudFiles.doors.filter(f => f.toLowerCase().startsWith(selection.design.toLowerCase()) && f.includes('-'));
-                } else {
-                    return Array.from(localValidFiles).filter(f => f.toLowerCase().startsWith(selection.design.toLowerCase()) && f.includes('-'));
-                }
-            };
-            const specialOptions = getSpecialOptions();
+            }, [selection, fabricCanvas, isCloudFiltered, cloudFiles, localValidFiles]);
 
             const handleDownload = () => {
                 if (!fabricCanvas) return;
@@ -426,9 +463,9 @@
                     <div className="h-screen flex flex-col items-center justify-center bg-slate-900 px-8 text-center">
                         <div className="w-20 h-20 bg-blue-600 rounded-3xl mb-6 flex items-center justify-center text-white text-4xl font-black italic shadow-2xl">CY</div>
                         <h2 className="text-white text-xl font-bold mb-8 tracking-widest uppercase">系統授權訪問</h2>
-                        <input type="text" value={authKey} onChange={(e)=>setAuthKey(e.target.value)} onKeyDown={(e)=>e.key==='Enter'&&checkKey()} placeholder="輸入授權金鑰" className="w-full max-w-sm p-4 bg-slate-800 border border-slate-700 rounded-xl text-center text-white mb-3 outline-none focus:border-blue-500 uppercase tracking-widest font-bold" />
+                        <input type="text" value={authKey} onChange={(e)=>setAuthKey(e.target.value)} onKeyDown={(e)=>e.key==='Enter'&&handleCheckKey()} placeholder="輸入授權金鑰" className="w-full max-w-sm p-4 bg-slate-800 border border-slate-700 rounded-xl text-center text-white mb-3 outline-none focus:border-blue-500 uppercase tracking-widest font-bold" />
                         {authError && <p className="text-rose-500 text-xs font-bold mb-4">{authError}</p>}
-                        <button onClick={()=>checkKey()} className="w-full max-w-sm py-4 bg-blue-600 text-white rounded-xl font-black shadow-xl active:scale-95 transition-all uppercase tracking-widest">登入系統</button>
+                        <button onClick={handleCheckKey} className="w-full max-w-sm py-4 bg-blue-600 text-white rounded-xl font-black shadow-xl active:scale-95 transition-all uppercase tracking-widest">登入系統</button>
                     </div>
                 );
             }
@@ -462,7 +499,7 @@
                             {(isScanning || isLocalScanning) && (
                                 <div className="absolute inset-0 bg-white/80 z-10 flex flex-col items-center justify-center">
                                     <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-2"></div>
-                                    <span className="text-xs font-bold text-blue-600">正在掃描圖庫目錄...</span>
+                                    <span className="text-xs font-bold text-blue-600">讀取目錄與過濾中...</span>
                                 </div>
                             )}
                             
@@ -491,7 +528,9 @@
                                                 <div className="w-full h-1.5 bg-slate-200 rounded-full"></div><span className="text-[9px] font-bold text-slate-600">原樣</span>
                                             </button>
                                             {Object.entries(CONFIG.lineColors).map(([lc, d]) => {
-                                                if (!hasLineFile(`${selection.design}_${lc}.png`)) return null;
+                                                const targetBase = `${selection.design}_${lc}.png`.toLowerCase();
+                                                const hasLine = isCloudFiltered ? cloudFiles.lines.some(f => f.toLowerCase() === targetBase) : localValidFiles.has(targetBase);
+                                                if (!hasLine) return null;
                                                 return (
                                                     <button key={lc} onClick={()=>setSelection({...selection, lineColor:lc})} className={`p-2 border-2 rounded-lg flex flex-col items-center gap-1 ${selection.lineColor===lc?'border-blue-500 bg-blue-50':'border-slate-100'}`}>
                                                         <div className="w-full h-1.5 rounded-full border border-slate-200" style={{backgroundColor: d.hex}}></div><span className="text-[9px] font-bold text-slate-600">{d.name}</span>
@@ -503,7 +542,10 @@
                                     
                                     {Object.entries(CONFIG.series).map(([tId, tName]) => {
                                         const seriesColors = Object.entries(CONFIG.colors).filter(([cId]) => {
-                                            return hasDoorFile(`${selection.design}${tId}${cId}.jpg`) || hasDoorFile(`${selection.design}${tId}${cId}.png`);
+                                            const base = `${selection.design}${tId}${cId}`.toLowerCase();
+                                            return isCloudFiltered 
+                                                ? cloudFiles.doors.some(f => f.toLowerCase() === `${base}.jpg` || f.toLowerCase() === `${base}.png`)
+                                                : localValidFiles.has(`${base}.jpg`) || localValidFiles.has(`${base}.png`);
                                         });
                                         if (seriesColors.length === 0) return null;
 
@@ -517,8 +559,9 @@
                                                         if (isCloudFiltered) {
                                                             const match = cloudFiles.doors.find(f => f.toLowerCase() === `${targetBase}.jpg`.toLowerCase() || f.toLowerCase() === `${targetBase}.png`.toLowerCase());
                                                             if (match) exactFile = match;
-                                                        } else if (localValidFiles.has(`${targetBase}.png`.toLowerCase())) {
-                                                            exactFile = `${targetBase}.png`;
+                                                        } else {
+                                                            const match = Array.from(localValidFiles).find(f => f.toLowerCase() === `${targetBase}.jpg`.toLowerCase() || f.toLowerCase() === `${targetBase}.png`.toLowerCase());
+                                                            if (match) exactFile = match;
                                                         }
 
                                                         return (
@@ -636,7 +679,7 @@
                                 <button onClick={handleRefreshCache} className="bg-slate-100 text-slate-600 px-3 py-2.5 rounded-xl text-[12px] font-black shadow-sm hover:bg-slate-200 active:scale-95 transition-all">
                                     🔄 刷新目錄
                                 </button>
-                                <button onClick={handleDownload} className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-5 py-2.5 rounded-xl text-[12px] font-black tracking-widest shadow-[0_4px_15px_rgba(59,130,246,0.4)] hover:shadow-[0_6px_20px_rgba(59,130,246,0.6)] hover:-translate-y-0.5 active:scale-95 transition-all uppercase flex items-center gap-2 border border-blue-400">
+                                <button onClick={handleDownload} className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-5 py-2.5 rounded-xl text-[12px] font-black tracking-widest shadow-[0_4px_15px_rgba(59,130,246,0.4)] hover:shadow-[0_6px_20px_rgba(59,130,246,0.6)] hover:-translate-y-0.5 active:scale-95 transition-all uppercase flex items-center gap-2 border border-blue-400 hidden sm:flex">
                                     📥 儲存圖檔
                                 </button>
                             </div>
