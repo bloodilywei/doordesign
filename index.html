@@ -32,14 +32,13 @@
     <script type="text/babel">
         const { useState, useEffect, useRef, useMemo } = React;
 
-        // ★ 畫布金鐘罩：絕對禁止 React 干涉重繪，保護 Fabric.js 結構
         const CanvasBox = React.memo(() => {
             return (
                 <div id="canvas-container-wrapper" className="absolute inset-0 w-full h-full">
                     <canvas id="main-canvas"></canvas>
                 </div>
             );
-        }, () => true); // 傳回 true 代表永遠不重新渲染這個 DOM
+        }, () => true); 
 
         const MY_FIREBASE_CONFIG = {
             apiKey: "AIzaSyD-I3XsPn77h4Vp6SYgZ5vhOZsovJBkhJk",
@@ -79,6 +78,10 @@
             const [availableColors, setAvailableColors] = useState(new Set());
             const [availableLines, setAvailableLines] = useState(new Set());
             const [isScanning, setIsScanning] = useState(false);
+            
+            // ★ 新增：記憶體快取，掃過一次的造型就不會再花時間掃描
+            const [scannedCache, setScannedCache] = useState({});
+            const canvasContainerRef = useRef(null);
 
             const sortedDesigns = useMemo(() => {
                 return [...CONFIG.potentialDesigns].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
@@ -106,73 +109,103 @@
                 if (saved) checkKey(saved);
             }, []);
 
-            // 智能掃描 (排隊限速 + 支援跳色 + 防 CORS 封鎖)
+            // ★ 漸進式掃描核心邏輯
             useEffect(() => {
                 if (!isAuthorized || !selection.design) return;
+
+                // 若已經掃描過，直接從記憶體拿，0 秒顯示！
+                if (scannedCache[selection.design]) {
+                    setAvailableColors(scannedCache[selection.design].colors);
+                    setAvailableLines(scannedCache[selection.design].lines);
+                    setIsScanning(false);
+                    return;
+                }
                 
+                let isCancelled = false; // 防止快速切換時舊請求干擾
+
                 const scanDesignOptions = async () => {
                     setIsScanning(true);
                     const foundColors = new Set();
                     const foundLines = new Set();
-                    const scanTasks = []; 
 
                     const checkFile = async (folder, filename) => {
                         try {
                             const res = await fetch(`${folder}/${filename}`, { method: 'HEAD' });
-                            if (res.ok) {
-                                if (folder === 'doors') foundColors.add(filename);
-                                if (folder === 'lines') foundLines.add(filename);
-                            } else {
-                                const ext = filename.split('.').pop();
-                                if (ext === 'jpg' || ext === 'png') {
-                                    const upperExtFilename = filename.slice(0, -(ext.length)) + ext.toUpperCase();
-                                    const resUpper = await fetch(`${folder}/${upperExtFilename}`, { method: 'HEAD' });
-                                    if (resUpper.ok) {
-                                        if (folder === 'doors') foundColors.add(upperExtFilename);
-                                        if (folder === 'lines') foundLines.add(upperExtFilename);
-                                    }
-                                }
+                            if (res.ok) return filename;
+                            
+                            const ext = filename.split('.').pop();
+                            if (ext === 'jpg' || ext === 'png') {
+                                const upperExtFilename = filename.slice(0, -(ext.length)) + ext.toUpperCase();
+                                const resUpper = await fetch(`${folder}/${upperExtFilename}`, { method: 'HEAD' });
+                                if (resUpper.ok) return upperExtFilename;
                             }
                         } catch (e) {}
+                        return null;
                     };
 
-                    const extendedSuffixes = ["-01", "-02", "-03", "-04", "-05", "-06", "-07", "-08", "-09", "-1", "-2", "-3", "-4"];
-
+                    // 【第一階段】：只掃描基礎的 40 種顏色 + 3 種線條 (瞬間完成)
+                    const baseTasks = [];
                     Object.keys(CONFIG.series).forEach(tId => {
                         Object.keys(CONFIG.colors).forEach(cId => {
-                            scanTasks.push(() => checkFile('doors', `${selection.design}${tId}${cId}.jpg`));
-                            extendedSuffixes.forEach(s => {
-                                scanTasks.push(() => checkFile('doors', `${selection.design}${tId}${cId}${s}.jpg`));
-                                scanTasks.push(() => checkFile('doors', `${selection.design}${tId}${cId}${s}.png`)); 
-                            });
+                            baseTasks.push(() => checkFile('doors', `${selection.design}${tId}${cId}.jpg`).then(f => f && foundColors.add(f)));
                         });
                     });
-
                     Object.keys(CONFIG.lineColors).forEach(lc => {
-                        scanTasks.push(() => checkFile('lines', `${selection.design}_${lc}.png`));
+                        baseTasks.push(() => checkFile('lines', `${selection.design}_${lc}.png`).then(f => f && foundLines.add(f)));
                     });
 
-                    const CHUNK_SIZE = 15;
-                    for (let i = 0; i < scanTasks.length; i += CHUNK_SIZE) {
-                        const chunk = scanTasks.slice(i, i + CHUNK_SIZE);
-                        await Promise.all(chunk.map(fn => fn()));
-                        await new Promise(resolve => setTimeout(resolve, 30)); 
-                    }
+                    // 執行第一階段並等待
+                    await Promise.all(baseTasks.map(t => t()));
+                    if (isCancelled) return;
 
-                    setAvailableColors(foundColors);
-                    setAvailableLines(foundLines);
-                    
+                    // ★ 關鍵：第一階段完成後，立刻關閉轉圈圈並顯示按鈕
+                    setAvailableColors(new Set(foundColors));
+                    setAvailableLines(new Set(foundLines));
+                    setIsScanning(false); 
+
                     if (foundColors.size > 0 && !foundColors.has(selection.file)) {
                         const sortedFound = Array.from(foundColors).sort();
                         setSelection(prev => ({ ...prev, file: sortedFound[0] }));
                     }
-                    setIsScanning(false);
+
+                    // 【第二階段】：背景默默掃描 500 個跳色組合 (不影響使用者，悄悄進行)
+                    const extendedSuffixes = ["-01", "-02", "-03", "-04", "-05", "-06", "-07", "-08", "-09", "-1", "-2", "-3", "-4"];
+                    const specialTasks = [];
+                    Object.keys(CONFIG.series).forEach(tId => {
+                        Object.keys(CONFIG.colors).forEach(cId => {
+                            extendedSuffixes.forEach(s => {
+                                specialTasks.push(() => checkFile('doors', `${selection.design}${tId}${cId}${s}.jpg`).then(f => f && foundColors.add(f)));
+                                specialTasks.push(() => checkFile('doors', `${selection.design}${tId}${cId}${s}.png`).then(f => f && foundColors.add(f)));
+                            });
+                        });
+                    });
+
+                    // 加大批次至 50 個，縮短整體背景掃描時間
+                    const CHUNK_SIZE = 50;
+                    for (let i = 0; i < specialTasks.length; i += CHUNK_SIZE) {
+                        if (isCancelled) return;
+                        const chunk = specialTasks.slice(i, i + CHUNK_SIZE);
+                        await Promise.all(chunk.map(fn => fn()));
+                        
+                        // 逐步更新畫面，如果有特殊跳色，它會自動跑出來
+                        setAvailableColors(new Set(foundColors));
+                        await new Promise(resolve => setTimeout(resolve, 10)); 
+                    }
+
+                    // 背景掃描全部結束後，將結果存入快取記憶體
+                    if (!isCancelled) {
+                        setScannedCache(prev => ({
+                            ...prev,
+                            [selection.design]: { colors: new Set(foundColors), lines: new Set(foundLines) }
+                        }));
+                    }
                 };
 
                 scanDesignOptions();
+
+                return () => { isCancelled = true; };
             }, [selection.design, isAuthorized]);
 
-            // 畫布初始化與視窗重設對齊
             useEffect(() => {
                 if (!isAuthorized) return;
                 
@@ -210,7 +243,7 @@
                     if (fabricCanvas && container) {
                         const cw = container.clientWidth;
                         const ch = container.clientHeight;
-                        if (cw === 0 || ch === 0) return; // 避免為 0 時縮放崩潰
+                        if (cw === 0 || ch === 0) return;
 
                         fabricCanvas.setWidth(cw);
                         fabricCanvas.setHeight(ch);
@@ -242,18 +275,13 @@
                 return () => { window.removeEventListener('resize', handleResize); clearTimeout(timer); };
             }, [isAuthorized, fabricCanvas, activeMenu]);
 
-            // 載入圖片邏輯 (★ 移除 crossOrigin 防止被阻擋)
             useEffect(() => {
                 if (!fabricCanvas || !selection.file || isScanning) return;
                 
                 const pureFile = selection.file.replace('doors/', '');
                 
                 fabric.Image.fromURL(`doors/${pureFile}`, (doorImg) => {
-                    // ★ 防護：如果圖片無法讀取，終止動作避免 NaN 崩潰
-                    if (!doorImg || !doorImg.width) {
-                        console.warn("圖檔載入失敗或損毀:", pureFile);
-                        return; 
-                    }
+                    if (!doorImg || !doorImg.width) return; 
                     
                     const cw = fabricCanvas.getWidth() || window.innerWidth * 0.6;
                     const ch = fabricCanvas.getHeight() || window.innerHeight;
@@ -293,14 +321,14 @@
                                     originX: 'center', originY: 'center', left: doorImg.left, top: doorImg.top 
                                 });
                                 fabricCanvas.add(lineImg);
-                                lineImg.moveTo(1); // 確保在配件下方
+                                lineImg.moveTo(1);
                                 fabricCanvas.requestRenderAll();
                             }
                         });
                     } else {
                         fabricCanvas.requestRenderAll();
                     }
-                }); // 這裡不加 crossOrigin，避免 Github 靜態頁面阻擋
+                }); 
             }, [selection, fabricCanvas, availableLines, isScanning]);
 
             const specialOptions = Array.from(availableColors).filter(f => f.includes('-'));
@@ -329,7 +357,6 @@
             return (
                 <div className="flex flex-col md:flex-row h-screen w-screen bg-slate-50 font-sans overflow-hidden">
                     
-                    {/* 左側面板區 */}
                     <div className={`
                         absolute md:relative top-0 left-0 h-[calc(100vh-5rem)] md:h-full 
                         w-[45%] md:w-80 bg-white border-r border-slate-200 z-20 shadow-2xl md:shadow-none 
@@ -363,9 +390,10 @@
 
                             {activeMenu === 'colors' && (
                                 <div className="flex flex-col gap-6 pb-6">
+                                    {/* ★ 改良：只在真正的「第一階段」顯示轉圈，瞬間就消失 */}
                                     {isScanning ? (
                                         <div className="flex flex-col items-center justify-center py-10 opacity-50">
-                                            <div className="w-6 h-6 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-2"></div><p className="text-[10px] font-bold text-blue-600">讀取圖庫中...</p>
+                                            <div className="w-6 h-6 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-2"></div><p className="text-[10px] font-bold text-blue-600">正在準備圖庫...</p>
                                         </div>
                                     ) : availableColors.size === 0 ? (
                                         <div className="text-center py-10 text-[10px] text-slate-400 font-bold border-2 border-dashed border-slate-200 rounded-xl mx-2">此型號無可用圖檔</div>
@@ -499,7 +527,6 @@
                         </div>
                     </div>
 
-                    {/* 右側畫布與控制區 */}
                     <div className="flex-1 flex flex-col relative h-[calc(100vh-5rem)] md:h-full min-w-0">
                         <div className="h-14 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-4 z-10 shrink-0 shadow-sm">
                             <div className="flex flex-col">
@@ -513,19 +540,18 @@
                             </button>
                         </div>
 
-                        {/* ★ 視覺載入器：掃描時顯示提示 */}
                         <div className="flex-1 canvas-bg relative w-full h-full min-h-[300px]">
                             <CanvasBox />
+                            {/* ★ 只在真正的「第一階段」顯示這個阻擋畫面的載入器 */}
                             {isScanning && (
                                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/60 backdrop-blur-sm z-50">
                                     <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-3 shadow-lg"></div>
-                                    <p className="text-[11px] font-black text-blue-700 tracking-widest">載入圖庫與繪製中...</p>
+                                    <p className="text-[11px] font-black text-blue-700 tracking-widest">載入基礎圖庫中...</p>
                                 </div>
                             )}
                         </div>
                     </div>
 
-                    {/* 手機底部導航 */}
                     <div className="md:hidden absolute bottom-0 left-0 w-full h-20 bg-white border-t flex items-center justify-around z-30 shadow-[0_-5px_20px_rgba(0,0,0,0.05)] pb-4">
                         <button onClick={()=>setActiveMenu(activeMenu==='designs'?null:'designs')} className={`nav-btn flex flex-col items-center justify-center flex-1 h-full gap-1 ${activeMenu==='designs'?'text-blue-600':'text-slate-400'}`}>
                             <div className="text-xl">🔲</div><span className="text-[10px] font-black uppercase tracking-widest">選造型</span>
