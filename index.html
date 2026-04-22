@@ -77,13 +77,11 @@
             const [selectedAcc, setSelectedAcc] = useState(null);
             const [doorScale, setDoorScale] = useState(1);
             
-            // 雲端目錄狀態
             const [cloudFiles, setCloudFiles] = useState({ doors: [], lines: [] });
             const [isCloudFiltered, setIsCloudFiltered] = useState(false); 
             const [isScanning, setIsScanning] = useState(false);
             const [toastMsg, setToastMsg] = useState('');
             
-            // 備用局部掃描狀態 (當 GitHub API 額度耗盡時啟動)
             const [localValidFiles, setLocalValidFiles] = useState(new Set());
             const [isLocalScanning, setIsLocalScanning] = useState(false);
             
@@ -93,38 +91,43 @@
             const imgFetchOptions = isLocalEnv ? {} : { crossOrigin: 'anonymous' };
 
             // =========================================================
-            // ★ 核心優化：由長到短精準比對，徹底解決 751 被誤判為 75 的問題
+            // ★ 核心優化：本機與雲端統一過濾，沒有圖檔就絕對不顯示按鈕
             // =========================================================
             const validDesigns = useMemo(() => {
                 const allDesigns = [...CONFIG.potentialDesigns].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-                if (!isCloudFiltered || cloudFiles.doors.length === 0) return allDesigns; 
+                
+                // 決定要用雲端目錄還是本機目錄來過濾
+                let sourceFiles = [];
+                if (isCloudFiltered && cloudFiles.doors.length > 0) {
+                    sourceFiles = cloudFiles.doors;
+                } else if (localValidFiles.size > 0) {
+                    sourceFiles = Array.from(localValidFiles);
+                } else {
+                    return []; // 如果都還沒掃描到，就顯示空清單
+                }
                 
                 const validSet = new Set();
                 const seriesKeys = Object.keys(CONFIG.series);
-                
-                // ★ 秘訣：將型號由長排到短 (如 751 排在 75 前面)
                 const allDesignsByLength = [...allDesigns].sort((a, b) => b.length - a.length);
                 
-                cloudFiles.doors.forEach(file => {
+                sourceFiles.forEach(file => {
                     const lowerFile = file.toLowerCase();
                     for (const d of allDesignsByLength) {
                         const dLower = d.toLowerCase();
                         if (lowerFile.startsWith(dLower)) {
                             const remainder = lowerFile.substring(dLower.length);
-                            // 確認剩下的字串是合法系列(1,2,3,5,6)或跳色橫槓(-01)
                             const isValidSeries = seriesKeys.some(sId => remainder.startsWith(sId));
                             const isSpecial = remainder.startsWith('-');
                             if (isValidSeries || isSpecial || remainder === '.jpg' || remainder === '.png') {
                                 validSet.add(d);
-                                break; // 該圖檔已找到最長且精確的主人，立刻停止比對，防止 75 搶走 751 的圖檔
+                                break; 
                             }
                         }
                     }
                 });
                 
-                // 最後再用正確的數字大小排序輸出
                 return allDesigns.filter(d => validSet.has(d));
-            }, [isCloudFiltered, cloudFiles]);
+            }, [isCloudFiltered, cloudFiles, localValidFiles]);
 
             const checkKey = async (key) => {
                 const targetKey = key || authKey;
@@ -148,22 +151,21 @@
                 if (saved) checkKey(saved);
             }, []);
 
-            // 1. 同步 GitHub 目錄 (快取 24 小時，徹底免去封鎖)
+            // 1. 同步 GitHub 目錄 
             const fetchRepoTree = async () => {
                 setIsScanning(true);
-                const cacheKey = 'github_repo_tree_v7'; // 升級快取版本
-                const cacheTimeKey = 'github_repo_tree_time_v7';
+                const cacheKey = 'github_repo_tree_v8'; 
+                const cacheTimeKey = 'github_repo_tree_time_v8';
                 
                 try {
                     if (isLocalEnv) {
                         setIsCloudFiltered(false);
                         setIsScanning(false);
-                        return;
+                        return; // 本機交給備用防線處理
                     }
 
                     const cached = localStorage.getItem(cacheKey);
                     const cachedTime = localStorage.getItem(cacheTimeKey);
-                    // 快取保留 24 小時 (86400000 毫秒)
                     if (cached && cachedTime && (Date.now() - parseInt(cachedTime) < 86400000)) {
                         setCloudFiles(JSON.parse(cached));
                         setIsCloudFiltered(true);
@@ -194,10 +196,7 @@
                         localStorage.setItem(cacheKey, JSON.stringify(filesObj));
                         localStorage.setItem(cacheTimeKey, Date.now().toString());
                     } else {
-                        // 遇到 API Rate Limit
                         setIsCloudFiltered(false);
-                        setToastMsg('API 次數用盡，切換為備用顯示模式');
-                        setTimeout(() => setToastMsg(''), 4000);
                     }
                 } catch (e) {
                     setIsCloudFiltered(false);
@@ -211,9 +210,9 @@
                 fetchRepoTree();
             }, [isAuthorized]);
 
-            // 2. 備用防線：當 GitHub API 被封鎖時，局部掃描當前顏色
+            // 2. 本機掃描防線：不管在哪，都會去找出實際存在的檔案
             useEffect(() => {
-                if (!isAuthorized || isCloudFiltered || !selection.design) return;
+                if (!isAuthorized || isCloudFiltered) return;
                 
                 const scanLocalFallback = async () => {
                     setIsLocalScanning(true);
@@ -226,32 +225,34 @@
                     };
 
                     const tasks = [];
-                    Object.keys(CONFIG.series).forEach(tId => {
-                        Object.keys(CONFIG.colors).forEach(cId => {
-                            tasks.push(() => check('doors', `${selection.design}${tId}${cId}.jpg`));
-                            tasks.push(() => check('doors', `${selection.design}${tId}${cId}.png`));
-                            ["-01", "-02", "-03", "-04", "-05", "A", "B", "C", "-A", "-B", "-C"].forEach(s => {
-                                tasks.push(() => check('doors', `${selection.design}${tId}${cId}${s}.jpg`));
+                    // 全面掃描有列在配置檔裡的門片
+                    CONFIG.potentialDesigns.forEach(design => {
+                        Object.keys(CONFIG.series).forEach(tId => {
+                            Object.keys(CONFIG.colors).forEach(cId => {
+                                tasks.push(() => check('doors', `${design}${tId}${cId}.jpg`));
+                                tasks.push(() => check('doors', `${design}${tId}${cId}.png`));
+                                ["-01", "-02", "-03", "A", "B"].forEach(s => {
+                                    tasks.push(() => check('doors', `${design}${tId}${cId}${s}.jpg`));
+                                });
                             });
                         });
-                    });
-                    Object.keys(CONFIG.lineColors).forEach(lc => {
-                        tasks.push(() => check('lines', `${selection.design}_${lc}.png`));
+                        Object.keys(CONFIG.lineColors).forEach(lc => {
+                            tasks.push(() => check('lines', `${design}_${lc}.png`));
+                        });
                     });
 
-                    // 慢速排隊，保證不觸發 DDoS
-                    const CHUNK_SIZE = 15;
+                    // 批次執行
+                    const CHUNK_SIZE = 30;
                     for (let i = 0; i < tasks.length; i += CHUNK_SIZE) {
                         const chunk = tasks.slice(i, i + CHUNK_SIZE);
                         await Promise.all(chunk.map(t => t()));
-                        await new Promise(r => setTimeout(r, 60));
+                        // 同步更新已找到的清單，讓畫面按鈕能漸進式出現
+                        setLocalValidFiles(new Set(found));
                     }
-
-                    setLocalValidFiles(found);
                     setIsLocalScanning(false);
                 };
                 scanLocalFallback();
-            }, [selection.design, isCloudFiltered, isAuthorized]);
+            }, [isCloudFiltered, isAuthorized]);
 
             const hasDoorFile = (filename) => {
                 const lower = filename.toLowerCase();
@@ -266,8 +267,8 @@
             };
 
             const handleRefreshCache = () => {
-                localStorage.removeItem('github_repo_tree_v7');
-                localStorage.removeItem('github_repo_tree_time_v7');
+                localStorage.removeItem('github_repo_tree_v8');
+                localStorage.removeItem('github_repo_tree_time_v8');
                 fetchRepoTree();
                 setToastMsg('圖庫目錄已強制更新！');
                 setTimeout(() => setToastMsg(''), 3000);
@@ -406,7 +407,7 @@
                 if (isCloudFiltered) {
                     return cloudFiles.doors.filter(f => f.toLowerCase().startsWith(selection.design.toLowerCase()) && f.includes('-'));
                 } else {
-                    return Array.from(localValidFiles).filter(f => f.includes('-'));
+                    return Array.from(localValidFiles).filter(f => f.toLowerCase().startsWith(selection.design.toLowerCase()) && f.includes('-'));
                 }
             };
             const specialOptions = getSpecialOptions();
@@ -461,14 +462,14 @@
                             {(isScanning || isLocalScanning) && (
                                 <div className="absolute inset-0 bg-white/80 z-10 flex flex-col items-center justify-center">
                                     <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-2"></div>
-                                    <span className="text-xs font-bold text-blue-600">讀取目錄與過濾中...</span>
+                                    <span className="text-xs font-bold text-blue-600">正在掃描圖庫目錄...</span>
                                 </div>
                             )}
                             
                             {activeMenu === 'designs' && (
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                    {validDesigns.length === 0 && !isScanning && (
-                                        <div className="col-span-full text-center py-10 text-[10px] text-slate-400 font-bold border-2 border-dashed border-slate-200 rounded-xl mx-2">尚未上傳任何圖檔</div>
+                                    {validDesigns.length === 0 && !isScanning && !isLocalScanning && (
+                                        <div className="col-span-full text-center py-10 text-[10px] text-slate-400 font-bold border-2 border-dashed border-slate-200 rounded-xl mx-2">尚未掃描到任何圖檔</div>
                                     )}
                                     {validDesigns.map(id => (
                                         <button key={id} onClick={()=>{
