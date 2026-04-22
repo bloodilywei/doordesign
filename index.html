@@ -86,15 +86,22 @@
             const [isLocalScanning, setIsLocalScanning] = useState(false);
             
             const canvasContainerRef = useRef(null);
-            const isLocalEnv = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
+            const isLocalEnv = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+            const imgFetchOptions = isLocalEnv ? {} : { crossOrigin: 'anonymous' };
+
+            // =========================================================
+            // ★ 核心修復：由長到短精準鎖定，拒絕 751 的圖被 75 偷走
+            // =========================================================
             const validDesigns = useMemo(() => {
                 const allDesigns = [...CONFIG.potentialDesigns].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
                 
+                // 如果 API 沒有拿到檔案，本機就顯示全部，雲端不該發生
                 if (!isCloudFiltered || cloudFiles.doors.length === 0) return allDesigns; 
                 
                 const validSet = new Set();
                 const seriesKeys = Object.keys(CONFIG.series);
+                // 秘訣：將型號由長排到短 (如 751 排在 75 前面)
                 const allDesignsByLength = [...allDesigns].sort((a, b) => b.length - a.length);
                 
                 cloudFiles.doors.forEach(file => {
@@ -102,12 +109,14 @@
                     for (const d of allDesignsByLength) {
                         const dLower = d.toLowerCase();
                         if (lowerFile.startsWith(dLower)) {
+                            // 擷取型號後面的剩餘字串 (例如 75111.jpg 切掉 751 剩下 11.jpg)
                             const remainder = lowerFile.substring(dLower.length);
-                            const isValidSeries = seriesKeys.some(sId => remainder.startsWith(sId));
-                            const isSpecial = remainder.startsWith('-');
-                            if (isValidSeries || isSpecial || remainder === '.jpg' || remainder === '.png') {
+                            const nextChar = remainder.charAt(0);
+                            
+                            // 嚴格判斷：後面緊接的字元必須是 1,2,3,5,6 (系列號) 或是 - (特殊款) 或是副檔名的 .
+                            if (seriesKeys.includes(nextChar) || nextChar === '-' || nextChar === '.' || /^[a-c]$/i.test(nextChar)) {
                                 validSet.add(d);
-                                break; 
+                                break; // 該圖檔已找到最長且精確的主人，立刻停止比對，防止 75 搶走
                             }
                         }
                     }
@@ -138,8 +147,8 @@
 
             const fetchRepoTree = async () => {
                 setIsScanning(true);
-                const cacheKey = 'github_repo_tree_v10'; 
-                const cacheTimeKey = 'github_repo_tree_time_v10';
+                const cacheKey = 'github_repo_tree_v11'; 
+                const cacheTimeKey = 'github_repo_tree_time_v11';
                 
                 try {
                     if (isLocalEnv) {
@@ -243,9 +252,6 @@
                 scanLocalFallback();
             }, [selection.design, isCloudFiltered, isAuthorized]);
 
-            // =========================================================================
-            // ★ 修復重點：無視大小寫比對，徹底解決 01_G.png 變 01_g.png 找不到的問題
-            // =========================================================================
             const hasDoorFile = (filename) => {
                 const lower = filename.toLowerCase();
                 if (isCloudFiltered) return cloudFiles.doors.some(f => f.toLowerCase() === lower);
@@ -258,32 +264,37 @@
                 return Array.from(localValidFiles).some(f => f.toLowerCase() === lower);
             };
 
+            // ★ 特殊組合款：一樣套用嚴格由長到短的比對邏輯
             const specialOptions = useMemo(() => {
                 const valid = [];
                 const designLower = selection.design.toLowerCase();
                 const sourceFiles = isCloudFiltered ? cloudFiles.doors : Array.from(localValidFiles);
-                
-                sourceFiles.forEach(f => {
-                    if (f.toLowerCase().startsWith(designLower) && f.includes('-')) {
-                        valid.push(f);
-                    }
-                });
-                
                 const allDesignsByLength = [...CONFIG.potentialDesigns].sort((a, b) => b.length - a.length);
-                return valid.filter(f => {
+                const seriesKeys = Object.keys(CONFIG.series);
+
+                sourceFiles.forEach(f => {
                     const lowerFile = f.toLowerCase();
-                    for (const d of allDesignsByLength) {
-                        if (lowerFile.startsWith(d.toLowerCase())) {
-                            return d === selection.design; 
+                    if (lowerFile.includes('-')) {
+                        for (const d of allDesignsByLength) {
+                            if (lowerFile.startsWith(d.toLowerCase())) {
+                                const remainder = lowerFile.substring(d.length);
+                                const nextChar = remainder.charAt(0);
+                                if (seriesKeys.includes(nextChar) || nextChar === '-') {
+                                    if (d === selection.design) {
+                                        valid.push(f);
+                                    }
+                                    break; 
+                                }
+                            }
                         }
                     }
-                    return false;
                 });
+                return valid;
             }, [isCloudFiltered, cloudFiles.doors, localValidFiles, selection.design]);
 
             const currentDesignFiles = useMemo(() => {
                 const valid = [];
-                const extendedSuffixes = ["", "-01", "-02", "-03", "-04", "-05", "A", "B", "C"];
+                const extendedSuffixes = ["", "-01", "-02", "-03", "-04", "-05", "A", "B", "C", "a", "b", "c"];
 
                 Object.keys(CONFIG.series).forEach(tId => {
                     Object.keys(CONFIG.colors).forEach(cId => {
@@ -315,8 +326,8 @@
             }, [currentDesignFiles, selection.file]);
 
             const handleRefreshCache = () => {
-                localStorage.removeItem('github_repo_tree_v10');
-                localStorage.removeItem('github_repo_tree_time_v10');
+                localStorage.removeItem('github_repo_tree_v11');
+                localStorage.removeItem('github_repo_tree_time_v11');
                 fetchRepoTree();
                 setToastMsg('圖庫目錄已強制更新！');
                 setTimeout(() => setToastMsg(''), 3000);
@@ -366,7 +377,7 @@
                             setDoorScale(newScale);
                             door.set({ scaleX: newScale, scaleY: newScale, left: cw/2, top: ch/2 });
                             const line = fabricCanvas.getObjects().find(o => o.id === 'lineLayer');
-                            if (line && line.width) line.set({ scaleX: door.getScaledWidth() / line.width, scaleY: door.getScaledHeight() / line.height, left: door.left, top: door.top });
+                            if (line && line.width) line.set({ scaleX: (door.width * newScale) / line.width, scaleY: (door.height * newScale) / line.height, left: cw / 2, top: ch / 2 });
                             fabricCanvas.getObjects().forEach(obj => {
                                 if (obj.id?.startsWith('acc')) { obj.set({ scaleX: newScale, scaleY: newScale }); obj.setCoords(); }
                             });
@@ -422,10 +433,10 @@
                                 const lineHtmlImg = await loadImageSafe(`lines/${targetLineFile}`);
                                 const lineImg = new fabric.Image(lineHtmlImg);
                                 lineImg.set({ 
-                                    scaleX: (doorImg.getScaledWidth()) / lineImg.width, 
-                                    scaleY: (doorImg.getScaledHeight()) / lineImg.height, 
+                                    scaleX: (doorImg.width * newScale) / lineImg.width, 
+                                    scaleY: (doorImg.height * newScale) / lineImg.height, 
                                     selectable: false, id: 'lineLayer', evented: false, 
-                                    originX: 'center', originY: 'center', left: doorImg.left, top: doorImg.top 
+                                    originX: 'center', originY: 'center', left: cw / 2, top: ch / 2 
                                 });
                                 fabricCanvas.add(lineImg);
                                 lineImg.moveTo(1); 
@@ -532,7 +543,6 @@
                                                 <div className="w-full h-1.5 bg-slate-200 rounded-full"></div><span className="text-[9px] font-bold text-slate-600">原樣</span>
                                             </button>
                                             {Object.entries(CONFIG.lineColors).map(([lc, d]) => {
-                                                // ★ 修正區域：使用精準的大小寫判斷函式
                                                 if (!hasLineFile(`${selection.design}_${lc}.png`)) return null;
                                                 return (
                                                     <button key={lc} onClick={()=>setSelection({...selection, lineColor:lc})} className={`p-2 border-2 rounded-lg flex flex-col items-center gap-1 ${selection.lineColor===lc?'border-blue-500 bg-blue-50':'border-slate-100'}`}>
@@ -544,7 +554,6 @@
                                     </div>
                                     
                                     {Object.entries(CONFIG.series).map(([tId, tName]) => {
-                                        // ★ 修正區域：使用精準的大小寫判斷函式
                                         const seriesColors = Object.entries(CONFIG.colors).filter(([cId]) => {
                                             const base = `${selection.design}${tId}${cId}`;
                                             return hasDoorFile(`${base}.jpg`) || hasDoorFile(`${base}.png`);
@@ -681,7 +690,7 @@
                                 <button onClick={handleRefreshCache} className="bg-slate-100 text-slate-600 px-3 py-2.5 rounded-xl text-[12px] font-black shadow-sm hover:bg-slate-200 active:scale-95 transition-all">
                                     🔄 刷新目錄
                                 </button>
-                                <button onClick={handleDownload} className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-5 py-2.5 rounded-xl text-[12px] font-black tracking-widest shadow-[0_4px_15px_rgba(59,130,246,0.4)] hover:shadow-[0_6px_20px_rgba(59,130,246,0.6)] hover:-translate-y-0.5 active:scale-95 transition-all uppercase flex items-center gap-2 border border-blue-400 hidden sm:flex">
+                                <button onClick={handleDownload} className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-5 py-2.5 rounded-xl text-[12px] font-black tracking-widest shadow-[0_4px_15px_rgba(59,130,246,0.4)] hover:shadow-[0_6px_20px_rgba(59,130,246,0.6)] hover:-translate-y-0.5 active:scale-95 transition-all uppercase items-center gap-2 border border-blue-400 hidden md:flex">
                                     📥 儲存圖檔
                                 </button>
                             </div>
@@ -692,7 +701,7 @@
                         </div>
                     </div>
 
-                    <div className="md:hidden absolute bottom-0 left-0 w-full h-20 bg-white border-t flex items-center justify-around z-30 shadow-[0_-5px_20px_rgba(0,0,0,0.05)] pb-4">
+                    <div className="md:hidden absolute bottom-0 left-0 w-full h-20 bg-white border-t flex items-center justify-around z-30 shadow-[0_-5px_20px_rgba(0,0,0,0.05)] pb-4 px-2">
                         <button onClick={()=>setActiveMenu(activeMenu==='designs'?null:'designs')} className={`nav-btn flex flex-col items-center justify-center flex-1 h-full gap-1 ${activeMenu==='designs'?'text-blue-600':'text-slate-400'}`}>
                             <div className="text-xl">🔲</div><span className="text-[10px] font-black uppercase tracking-widest">選造型</span>
                         </button>
@@ -701,6 +710,9 @@
                         </button>
                         <button onClick={()=>setActiveMenu(activeMenu==='acc'?null:'acc')} className={`nav-btn flex flex-col items-center justify-center flex-1 h-full gap-1 ${activeMenu==='acc'?'text-blue-600':'text-slate-400'}`}>
                             <div className="text-xl">⚙️</div><span className="text-[10px] font-black uppercase tracking-widest">加配件</span>
+                        </button>
+                        <button onClick={handleDownload} className="nav-btn flex flex-col items-center justify-center flex-1 h-full gap-1 text-indigo-500 hover:text-indigo-700 active:scale-95 transition-transform">
+                            <div className="text-xl">📥</div><span className="text-[10px] font-black uppercase tracking-widest">儲存圖檔</span>
                         </button>
                     </div>
 
