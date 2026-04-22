@@ -82,6 +82,9 @@
             const [isScanning, setIsScanning] = useState(false);
             const [toastMsg, setToastMsg] = useState('');
             
+            // ★ 新增：畫布錯誤狀態管理 (用來顯示高質感的懸浮警告窗)
+            const [canvasError, setCanvasError] = useState(null);
+
             const [localValidFiles, setLocalValidFiles] = useState({ doors: new Set(), lines: new Set() });
             const [isLocalScanning, setIsLocalScanning] = useState(false);
             const [accTab, setAccTab] = useState('glass'); 
@@ -177,8 +180,8 @@
 
             const fetchRepoTree = async (forceRefresh = false) => {
                 setIsScanning(true);
-                const cacheKey = 'github_repo_tree_v19'; 
-                const cacheTimeKey = 'github_repo_tree_time_v19';
+                const cacheKey = 'github_repo_tree_v20'; 
+                const cacheTimeKey = 'github_repo_tree_time_v20';
                 
                 try {
                     if (isLocalEnv) {
@@ -214,7 +217,6 @@
                             const fileName = item.path.split('/')[1];
                             
                             if (lowerPath.startsWith('doors/')) {
-                                // ★ 終極防呆：嚴格禁止線條檔 (結尾是 _G.png, -B.png 等) 混入門片名單！
                                 if (!/^[0-9a-z]+[-_][gbw]\.(png|jpg)$/i.test(fileName)) {
                                     doors.push(fileName);
                                 }
@@ -273,7 +275,6 @@
                             const res = await fetch(`${folder}/${file}?t=${Date.now()}`, { method: 'HEAD' });
                             const contentType = res.headers.get('content-type') || '';
                             if (res.ok && contentType.includes('image')) {
-                                // ★ 終極防呆：嚴格禁止線條檔混入門片名單！
                                 if (folder === 'doors' && !/^[0-9a-z]+[-_][gbw]\.(png|jpg)$/i.test(file)) {
                                     foundDoors.add(file);
                                 } else if (folder === 'lines') {
@@ -348,12 +349,26 @@
                 }
             }, [filesForCurrentDesign, selection.file]);
 
+            // ★ 強韌加倍的圖片載入器：遇到 CORS 錯誤自動重試
             const loadImageSafe = (url) => {
                 return new Promise((resolve, reject) => {
                     const img = new window.Image();
+                    const onLoad = () => resolve(img);
+                    const onError = () => {
+                        if (img.crossOrigin) {
+                            // 第一次如果跨域失敗，拔掉 crossOrigin 再次嘗試 (應對 GitHub Pages 偶發快取問題)
+                            const imgRetry = new window.Image();
+                            imgRetry.onload = () => resolve(imgRetry);
+                            imgRetry.onerror = () => reject(new Error(`無法載入圖片: ${url}`));
+                            imgRetry.src = url;
+                        } else {
+                            reject(new Error(`無法載入圖片: ${url}`));
+                        }
+                    };
+                    
                     if (!isLocalEnv) img.crossOrigin = 'anonymous'; 
-                    img.onload = () => resolve(img);
-                    img.onerror = () => reject(new Error(`無法載入圖片: ${url}`));
+                    img.onload = onLoad;
+                    img.onerror = onError;
                     img.src = url;
                 });
             };
@@ -405,6 +420,7 @@
                 return () => { window.removeEventListener('resize', handleResize); clearTimeout(timer); };
             }, [isAuthorized, fabricCanvas, activeMenu]);
 
+            // ★ 升級無殘影與錯誤處理引擎
             useEffect(() => {
                 if (!fabricCanvas || !selection.file) return;
                 
@@ -420,8 +436,10 @@
                 
                 const drawCanvas = async () => {
                     try {
+                        setCanvasError(null); // 開始繪製前清空錯誤狀態
+
                         fabricCanvas.getObjects().forEach(obj => {
-                            if (['door', 'lineLayer', 'errorText', 'errorBg'].includes(obj.id)) fabricCanvas.remove(obj);
+                            if (['door', 'lineLayer'].includes(obj.id)) fabricCanvas.remove(obj);
                         });
                         fabricCanvas.requestRenderAll();
 
@@ -430,7 +448,7 @@
                         if (isCancelled) return;
                         
                         fabricCanvas.getObjects().forEach(obj => {
-                            if (['door', 'lineLayer', 'errorText', 'errorBg'].includes(obj.id)) fabricCanvas.remove(obj);
+                            if (['door', 'lineLayer'].includes(obj.id)) fabricCanvas.remove(obj);
                         });
 
                         const doorImg = new fabric.Image(doorHtmlImg);
@@ -474,20 +492,9 @@
 
                     } catch (error) {
                         if (isCancelled) return; 
-                        
-                        const errorBg = new fabric.Rect({
-                            id: 'errorBg', left: cw / 2, top: ch / 2, originX: 'center', originY: 'center',
-                            width: 320, height: 100, rx: 15, ry: 15, fill: 'rgba(255, 255, 255, 0.9)',
-                            stroke: '#ef4444', strokeWidth: 3, selectable: false, evented: false
-                        });
-
-                        const errorText = new fabric.Text(`⚠️ 尚未上傳圖檔\n${actualDoorFile}`, {
-                            id: 'errorText', left: cw / 2, top: ch / 2, originX: 'center', originY: 'center',
-                            fontSize: 18, fontWeight: 'bold', fill: '#ef4444', textAlign: 'center', selectable: false, evented: false
-                        });
-                        
-                        fabricCanvas.add(errorBg, errorText);
-                        fabricCanvas.requestRenderAll();
+                        // ★ 發生錯誤時不再畫在畫布上，改用高質感的 HTML 懸浮狀態
+                        setCanvasError(actualDoorFile);
+                        fabricCanvas.requestRenderAll(); 
                     }
                 };
 
@@ -518,7 +525,7 @@
 
             if (!isAuthorized) {
                 return (
-                    <div className="h-screen flex flex-col items-center justify-center bg-slate-900 px-8 text-center">
+                    <div className="h-[100dvh] flex flex-col items-center justify-center bg-slate-900 px-8 text-center">
                         <div className="w-20 h-20 bg-blue-600 rounded-3xl mb-6 flex items-center justify-center text-white text-4xl font-black italic shadow-2xl">CY</div>
                         <h2 className="text-white text-xl font-bold mb-8 tracking-widest uppercase">系統授權訪問</h2>
                         <input type="text" value={authKey} onChange={(e)=>setAuthKey(e.target.value)} onKeyDown={(e)=>e.key==='Enter'&&handleCheckKey()} placeholder="輸入授權金鑰" className="w-full max-w-sm p-4 bg-slate-800 border border-slate-700 rounded-xl text-center text-white mb-3 outline-none focus:border-blue-500 uppercase tracking-widest font-bold" />
@@ -529,19 +536,20 @@
             }
 
             return (
-                <div className="flex flex-col md:flex-row h-screen w-screen bg-slate-50 font-sans overflow-hidden relative">
+                // ★ 全面升級 h-[100dvh]，徹底解決手機瀏覽器網址列導致下方按鈕消失的問題
+                <div className="flex flex-col md:flex-row h-[100dvh] w-screen bg-slate-50 font-sans overflow-hidden relative">
                     
                     {toastMsg && (
-                        <div className="absolute top-16 left-1/2 -translate-x-1/2 bg-rose-600 text-white px-6 py-3 rounded-full text-xs font-black shadow-2xl z-50 toast-enter flex items-center gap-2 border-2 border-rose-400">
+                        <div className="absolute top-16 left-1/2 -translate-x-1/2 bg-rose-600 text-white px-6 py-3 rounded-full text-xs font-black shadow-2xl z-[60] toast-enter flex items-center gap-2 border-2 border-rose-400">
                             <span>⚠️</span> {toastMsg}
                         </div>
                     )}
 
                     <div className={`
-                        absolute md:relative top-0 left-0 h-[calc(100vh-5rem)] md:h-full 
-                        w-[45%] md:w-80 bg-white border-r border-slate-200 z-20 shadow-2xl md:shadow-none 
+                        absolute md:relative top-0 left-0 h-[calc(100dvh-70px)] md:h-full 
+                        w-[50%] md:w-80 bg-white border-r border-slate-200 z-40 shadow-2xl md:shadow-none 
                         transition-all duration-300 flex flex-col shrink-0
-                        ${activeMenu ? 'ml-0' : '-ml-[45%] md:ml-0'}
+                        ${activeMenu ? 'ml-0' : '-ml-[50%] md:ml-0'}
                     `}>
                         <div className="hidden md:flex h-14 bg-slate-50 border-b border-slate-200 shrink-0">
                             <button onClick={()=>setActiveMenu('designs')} className={`flex-1 flex flex-col items-center justify-center transition-colors ${activeMenu==='designs'?'bg-white text-blue-600 border-b-2 border-blue-600':'text-slate-400 hover:bg-slate-100'}`}><span className="text-[12px] font-black">造型</span></button>
@@ -628,7 +636,6 @@
                                                         }
                                                         if (!exactFile) exactFile = `${selection.design}-${tId}${cId}.jpg`;
 
-                                                        // ★ 修正：專門為了石紋系列強制命名「大理石」
                                                         const displayName = tId === '5' ? '大理石' : c.name;
 
                                                         return (
@@ -645,7 +652,6 @@
 
                                     {specialOptions.length > 0 && (
                                         <div className="border-t border-slate-200 pt-4 mt-2">
-                                            {/* ★ 優化：更改標題為「特殊款式與變化款」以符合使用情境 */}
                                             <p className="text-[10px] font-black text-amber-600 mb-2 border-l-2 border-amber-400 pl-1 uppercase">特殊款式與變化款</p>
                                             <div className="flex flex-col gap-2">
                                                 {specialOptions.map(f => (
@@ -749,7 +755,8 @@
                         </div>
                     </div>
 
-                    <div className="flex-1 flex flex-col relative h-[calc(100vh-5rem)] md:h-full min-w-0">
+                    {/* ★ 為了防止被手機底部導覽列蓋住，主區域底部增加 padding */}
+                    <div className="flex-1 flex flex-col relative h-[calc(100dvh-70px)] md:h-full min-w-0 pb-[70px] md:pb-0">
                         <div className="h-14 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-4 z-10 shrink-0 shadow-sm">
                             <div className="flex flex-col">
                                 <span className="text-[9px] font-black text-slate-400 tracking-widest uppercase">Model Preview</span>
@@ -769,10 +776,26 @@
 
                         <div className="flex-1 canvas-bg relative w-full h-full min-h-[300px]" ref={canvasContainerRef}>
                             <CanvasBox />
+                            {/* ★ 全新高質感懸浮錯誤提示 (不再會被左側選單遮住) */}
+                            {canvasError && (
+                                <div className={`absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-30 transition-all ${activeMenu ? 'pl-[50%] md:pl-0' : ''}`}>
+                                    <div className="bg-white/95 border-2 border-rose-500 rounded-2xl p-5 md:p-8 text-center shadow-2xl backdrop-blur-sm mx-4 animate-in zoom-in duration-300">
+                                        <p className="text-rose-500 font-black text-lg md:text-xl mb-2 flex items-center justify-center gap-2">
+                                            <span>⚠️</span> 尚未上傳圖檔
+                                        </p>
+                                        <p className="text-rose-600 font-bold text-sm md:text-base break-all bg-rose-50 px-3 py-1 rounded-md">{canvasError}</p>
+                                        <div className="mt-4 pt-4 border-t border-rose-100">
+                                            <p className="text-slate-500 font-bold text-[11px] md:text-xs mb-1">若您剛上傳了新檔案至 GitHub：</p>
+                                            <p className="text-slate-400 text-[10px] md:text-xs leading-relaxed">伺服器需要約 <span className="text-blue-600 font-bold">2 ~ 3 分鐘</span> 進行網頁更新。<br/>請稍候片刻，再點擊右上方的 <span className="text-slate-600 font-bold bg-slate-100 px-1 rounded">🔄 刷新目錄</span></p>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
 
-                    <div className="md:hidden absolute bottom-0 left-0 w-full h-20 bg-white border-t flex items-center justify-around z-30 shadow-[0_-5px_20px_rgba(0,0,0,0.05)] pb-4 px-2">
+                    {/* ★ 手機版底部導覽列：永久置底 fixed，並使用 env(safe-area) 適應 iPhone 底部橫條 */}
+                    <div className="md:hidden fixed bottom-0 left-0 w-full h-[70px] bg-white border-t flex items-center justify-around z-50 shadow-[0_-5px_20px_rgba(0,0,0,0.05)] pb-[env(safe-area-inset-bottom)]">
                         <button onClick={()=>setActiveMenu(activeMenu==='designs'?null:'designs')} className={`nav-btn flex flex-col items-center justify-center flex-1 h-full gap-1 ${activeMenu==='designs'?'text-blue-600':'text-slate-400'}`}>
                             <div className="text-xl">🔲</div><span className="text-[10px] font-black uppercase tracking-widest">選造型</span>
                         </button>
