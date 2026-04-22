@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover">
-    <title>門片模擬系統 - 專業版</title>
+    <title>門片模擬系統 - 旗艦版</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -60,10 +60,72 @@
                 "8": { name: "摩卡", hex: "#4B3621" }, "9": { name: "灰橡", hex: "#8E8E8E" }
             },
             lineColors: { "G": { name: "灰線", hex: "#9ca3af" }, "B": { name: "黑線", hex: "#000000" }, "W": { name: "白線", hex: "#ffffff" } },
+            // 本機預設配件清單 (雲端有資料時會被自動解析引擎覆蓋)
             glassFrames: [ { id: "GLS_G-01_467×725", name: "玻璃框 G-01" }, { id: "GLS_T_08_200×605", name: "玻璃框 T-08" }, { id: "GLS_T_09_370×605", name: "玻璃框 T-09" }, { id: "GLS_T_16_200×200", name: "玻璃框 T-16" }, { id: "GLS_T_17_250×950", name: "玻璃框 T-17" } ],
             louvers: [ { id: "LOU_A-03_378×230", name: "百頁 A-03" }, { id: "LOU_A-04_200×650", name: "百頁 A-04" }, { id: "LOU_A-05_400×650", name: "百頁 A-05" }, { id: "LOU_A-13_250×297", name: "百頁 A-13" } ],
             accColors: [ { id: "白", name: "白色", hex: "#FFFFFF" }, { id: "柚木", name: "柚木色", hex: "#966F33" }, { id: "胡桃", name: "胡桃色", hex: "#5D4037" } ],
             potentialDesigns: Array.from({length: 999}, (_, i) => (i + 1).toString().padStart(2, '0'))
+        };
+
+        const DesignCard = ({ id, cloudFiles, isCloudFiltered, onSelect }) => {
+            const [isFailed, setIsFailed] = useState(false);
+            const [isLoaded, setIsLoaded] = useState(false);
+
+            const thumbSrc = useMemo(() => {
+                if (isCloudFiltered) {
+                    const dLower = id.toLowerCase();
+                    const match = cloudFiles.doors.find(f => {
+                        const lower = f.toLowerCase();
+                        return lower.startsWith(dLower + '-') || lower.startsWith(dLower + '_') ||
+                               (lower.startsWith(dLower) && Object.keys(CONFIG.series).includes(lower.substring(dLower.length).charAt(0)));
+                    });
+                    return match ? `doors/${match}` : null;
+                } else {
+                    return `doors/${id}-11.jpg`; 
+                }
+            }, [id, cloudFiles, isCloudFiltered]);
+
+            if (isCloudFiltered && !thumbSrc) return null;
+            if (isFailed) return null;
+
+            const handleImageError = (e) => {
+                if (!isCloudFiltered) {
+                    const currentSrc = e.target.getAttribute('src');
+                    if (currentSrc === `doors/${id}-11.jpg`) e.target.src = `doors/${id}11.jpg`;
+                    else if (currentSrc === `doors/${id}11.jpg`) e.target.src = `doors/${id}-12.jpg`;
+                    else if (currentSrc === `doors/${id}-12.jpg`) e.target.src = `doors/${id}12.jpg`;
+                    else setIsFailed(true); 
+                } else {
+                    setIsFailed(true);
+                }
+            };
+
+            return (
+                <button
+                    onClick={() => onSelect(id)}
+                    className="group bg-white border border-slate-200 rounded-2xl overflow-hidden hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 flex flex-col focus:outline-none focus:ring-4 focus:ring-blue-200 animate-in fade-in zoom-in-95"
+                >
+                    <div className="w-full aspect-[1/2.1] bg-slate-50 relative flex items-center justify-center p-3 md:p-5 border-b border-slate-100">
+                        {!isLoaded && (
+                            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
+                                <div className="w-6 h-6 border-2 border-slate-300 border-t-blue-500 rounded-full animate-spin"></div>
+                                <span className="text-[9px] text-slate-400 font-bold tracking-widest">載入中</span>
+                            </div>
+                        )}
+                        <img
+                            src={thumbSrc}
+                            alt={`造型 ${id}`}
+                            loading="lazy"
+                            onLoad={() => setIsLoaded(true)}
+                            onError={handleImageError}
+                            className={`w-full h-full object-contain drop-shadow-lg group-hover:scale-[1.05] transition-all duration-500 ${isLoaded ? 'opacity-100' : 'opacity-0'}`}
+                        />
+                    </div>
+                    <div className="p-3 md:p-4 w-full text-center bg-white shrink-0">
+                        <span className="text-[12px] md:text-sm font-black text-slate-700 tracking-widest">造型 {id}</span>
+                    </div>
+                </button>
+            );
         };
 
         const App = () => {
@@ -71,7 +133,6 @@
             const [authKey, setAuthKey] = useState('');
             const [authError, setAuthError] = useState('');
             
-            // ★ 新增：核心視圖狀態管理 ('gallery' = 型錄總覽, 'editor' = 編輯畫面)
             const [appView, setAppView] = useState('gallery'); 
             
             const [activeMenu, setActiveMenu] = useState('colors'); 
@@ -80,7 +141,8 @@
             const [selectedAcc, setSelectedAcc] = useState(null);
             const [doorScale, setDoorScale] = useState(1);
             
-            const [cloudFiles, setCloudFiles] = useState({ doors: [], lines: [] });
+            // ★ 新增 accs 陣列來存放雲端配件
+            const [cloudFiles, setCloudFiles] = useState({ doors: [], lines: [], accs: [] });
             const [isCloudFiltered, setIsCloudFiltered] = useState(false); 
             const [isScanning, setIsScanning] = useState(false);
             const [toastMsg, setToastMsg] = useState('');
@@ -127,22 +189,6 @@
                 return allDesigns.filter(d => validSet.has(d));
             }, [isCloudFiltered, cloudFiles]);
 
-            const getDesignThumbnail = useCallback((designId) => {
-                const sourceFiles = isCloudFiltered ? cloudFiles.doors : Array.from(localValidFiles.doors);
-                const dLower = designId.toLowerCase();
-                const match = sourceFiles.find(f => {
-                    const lowerFile = f.toLowerCase();
-                    if (lowerFile.startsWith(dLower + '-') || lowerFile.startsWith(dLower + '_')) return true;
-                    if (lowerFile.startsWith(dLower)) {
-                        const remainder = lowerFile.substring(dLower.length);
-                        const nextChar = remainder.charAt(0);
-                        if (Object.keys(CONFIG.series).includes(nextChar)) return true;
-                    }
-                    return false;
-                });
-                return match ? `doors/${match}` : null;
-            }, [isCloudFiltered, cloudFiles.doors, localValidFiles.doors]);
-
             const filesForCurrentDesign = useMemo(() => {
                 if (!selection.design) return [];
                 const sourceFiles = isCloudFiltered ? cloudFiles.doors : Array.from(localValidFiles.doors);
@@ -179,6 +225,59 @@
                 });
             }, [filesForCurrentDesign, selection.design]);
 
+            // =========================================================
+            // ★ 核心升級：自動動態解析配件清單
+            // =========================================================
+            const dynamicAccessories = useMemo(() => {
+                // 如果沒有雲端資料，本機預設使用 CONFIG 定義
+                if (!isCloudFiltered || !cloudFiles.accs || cloudFiles.accs.length === 0) {
+                    return { glass: CONFIG.glassFrames, louver: CONFIG.louvers };
+                }
+
+                const glass = [];
+                const louver = [];
+                const addedIds = new Set();
+                const validColors = CONFIG.accColors.map(c => c.id);
+
+                cloudFiles.accs.forEach(file => {
+                    // 解析檔名，例如: GLS_G-01_467x725_白.png 擷取前半段 ID 與 顏色
+                    const match = file.match(/^(.+?)_([^_.]+)\.(png|jpg)$/i);
+                    if (match) {
+                        const baseId = match[1];
+                        const colorId = match[2];
+                        
+                        // 確認結尾的顏色是系統支援的 (防呆)
+                        if (validColors.includes(colorId) && !addedIds.has(baseId)) {
+                            addedIds.add(baseId);
+                            
+                            let name = baseId;
+                            // 自動化命名與分類：根據前綴判斷
+                            if (baseId.toUpperCase().startsWith('GLS_')) {
+                                name = baseId.substring(4).replace(/_/g, ' '); 
+                                glass.push({ id: baseId, name: `玻璃框 ${name}` });
+                            } else if (baseId.toUpperCase().startsWith('LOU_')) {
+                                name = baseId.substring(4).replace(/_/g, ' ');
+                                louver.push({ id: baseId, name: `百頁 ${name}` });
+                            } else {
+                                // 沒照規則命名的，預設丟到玻璃框，名字直接用原檔名
+                                glass.push({ id: baseId, name: baseId });
+                            }
+                        }
+                    }
+                });
+
+                // 防呆：如果雲端資料夾解析失敗，退回預設清單
+                if (glass.length === 0 && louver.length === 0) {
+                    return { glass: CONFIG.glassFrames, louver: CONFIG.louvers };
+                }
+
+                // 照字母排序，讓選單整齊劃一
+                glass.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+                louver.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+
+                return { glass, louver };
+            }, [isCloudFiltered, cloudFiles.accs]);
+
             const handleCheckKey = async () => {
                 if (!authKey) return;
                 setAuthError('驗證中...');
@@ -197,8 +296,8 @@
 
             const fetchRepoTree = async (forceRefresh = false) => {
                 setIsScanning(true);
-                const cacheKey = 'github_repo_tree_v22'; 
-                const cacheTimeKey = 'github_repo_tree_time_v22';
+                const cacheKey = 'github_repo_tree_v24'; 
+                const cacheTimeKey = 'github_repo_tree_time_v24';
                 
                 try {
                     if (isLocalEnv) {
@@ -229,6 +328,8 @@
                         const data = await res.json();
                         const doors = [];
                         const lines = [];
+                        const accs = []; // ★ 新增配件收集陣列
+
                         data.tree.forEach(item => {
                             const lowerPath = item.path.toLowerCase();
                             const fileName = item.path.split('/')[1];
@@ -241,8 +342,12 @@
                             if (lowerPath.startsWith('lines/')) {
                                 lines.push(fileName);
                             }
+                            // ★ 把雲端的配件全部抓進來
+                            if (lowerPath.startsWith('accessories/')) {
+                                accs.push(fileName);
+                            }
                         });
-                        const filesObj = { doors, lines };
+                        const filesObj = { doors, lines, accs };
                         setCloudFiles(filesObj);
                         setIsCloudFiltered(true);
                         localStorage.setItem(cacheKey, JSON.stringify(filesObj));
@@ -383,7 +488,6 @@
                             reject(new Error(`無法載入圖片: ${url}`));
                         }
                     };
-                    
                     if (!isLocalEnv) img.crossOrigin = 'anonymous'; 
                     img.onload = onLoad;
                     img.onerror = onError;
@@ -391,7 +495,7 @@
                 });
             };
 
-            // 畫布初始化：切換到 Editor 視圖時掛載
+            // 畫布初始化
             useEffect(() => {
                 if (!isAuthorized || appView !== 'editor' || !canvasContainerRef.current) return;
                 
@@ -435,14 +539,13 @@
                 };
                 window.addEventListener('resize', handleResize);
                 
-                // 元件卸載時銷毀畫布
                 return () => { 
                     window.removeEventListener('resize', handleResize);
                     canvas.dispose();
                     setFabricCanvas(null);
                     setSelectedAcc(null);
                 };
-            }, [isAuthorized, appView]); // 依賴 appView，視圖切換會重新掛載
+            }, [isAuthorized, appView]);
 
             // 繪圖引擎
             useEffect(() => {
@@ -546,10 +649,9 @@
                 setTimeout(() => setToastMsg(''), 2000);
             };
 
-            // 進入編輯器
             const openEditor = (designId) => {
                 setSelection({...selection, design: designId});
-                setActiveMenu('colors'); // 進入編輯器預設顯示顏色
+                setActiveMenu('colors'); 
                 setAppView('editor');
             };
 
@@ -577,7 +679,6 @@
                             </div>
                         )}
                         
-                        {/* 型錄頂部導覽列 */}
                         <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 sticky top-0 z-40 shadow-sm">
                             <div className="flex items-center gap-3">
                                 <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-black italic">CY</div>
@@ -592,55 +693,30 @@
                             </div>
                         </header>
 
-                        {/* 型錄網格區域 */}
-                        <main className="flex-1 p-6 md:p-10 max-w-7xl mx-auto w-full">
+                        <main className="flex-1 p-4 md:p-10 max-w-[1600px] mx-auto w-full">
                             <div className="mb-6 flex items-center justify-between">
                                 <h2 className="text-sm font-black text-slate-500 uppercase tracking-widest border-l-4 border-blue-500 pl-3">請選擇您要編輯的造型</h2>
-                                <span className="text-xs font-bold text-slate-400 bg-slate-200 px-3 py-1 rounded-full">{validDesigns.length} 款式</span>
+                                <span className="text-xs font-bold text-slate-400 bg-slate-200 px-3 py-1 rounded-full">{CONFIG.potentialDesigns.length} 款式</span>
                             </div>
 
-                            {validDesigns.length === 0 && !isScanning ? (
-                                <div className="py-20 text-center flex flex-col items-center justify-center">
-                                    <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center text-3xl mb-4 grayscale">📭</div>
-                                    <h3 className="text-slate-500 font-black text-lg mb-2">目錄中尚無圖檔</h3>
-                                    <p className="text-slate-400 text-sm">請上傳圖檔至 GitHub 後點擊右上角刷新</p>
-                                </div>
-                            ) : (
-                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 md:gap-6">
-                                    {validDesigns.map(id => {
-                                        const thumbSrc = getDesignThumbnail(id);
-                                        return (
-                                            <button 
-                                                key={id} 
-                                                onClick={() => openEditor(id)}
-                                                className="group bg-white border border-slate-200 rounded-2xl overflow-hidden hover:shadow-xl hover:-translate-y-1 transition-all duration-300 flex flex-col focus:outline-none focus:ring-4 focus:ring-blue-100"
-                                            >
-                                                {/* ★ 完美解決裁切：使用 object-contain 與合適的容器比例 */}
-                                                <div className="w-full aspect-[1/2.2] bg-slate-50 relative flex items-center justify-center p-3 border-b border-slate-100">
-                                                    {thumbSrc ? (
-                                                        <img src={thumbSrc} alt={`造型 ${id}`} loading="lazy" className="w-full h-full object-contain drop-shadow-md group-hover:scale-[1.02] transition-transform duration-500" onError={(e) => e.target.style.display='none'} />
-                                                    ) : (
-                                                        <div className="text-slate-300 flex flex-col items-center gap-2">
-                                                            <span className="text-2xl">🚪</span>
-                                                            <span className="text-[10px] font-bold">無預覽圖片</span>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                                <div className="p-4 w-full text-center bg-white">
-                                                    <span className="text-sm font-black text-slate-700 tracking-wider">造型 {id}</span>
-                                                </div>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            )}
+                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-6">
+                                {CONFIG.potentialDesigns.map(id => (
+                                    <DesignCard 
+                                        key={id} 
+                                        id={id} 
+                                        cloudFiles={cloudFiles} 
+                                        isCloudFiltered={isCloudFiltered} 
+                                        onSelect={openEditor} 
+                                    />
+                                ))}
+                            </div>
                         </main>
                     </div>
                 );
             }
 
             // =========================================================================
-            // 視圖 2：編輯器 (Editor View)
+            // 視圖 2：編輯器工作室 (Editor View)
             // =========================================================================
             return (
                 <div className="flex flex-col md:flex-row h-[100dvh] w-screen bg-slate-50 font-sans overflow-hidden relative animate-in fade-in duration-300">
@@ -651,7 +727,6 @@
                         </div>
                     )}
 
-                    {/* 編輯器側邊欄：移除「造型」分頁，只保留「顏色」與「配件」 */}
                     <div className={`
                         absolute md:relative top-0 left-0 h-[calc(100dvh-70px)] md:h-full 
                         w-[50%] md:w-80 bg-white border-r border-slate-200 z-40 shadow-2xl md:shadow-none 
@@ -765,8 +840,9 @@
                                                 </button>
                                             </div>
 
+                                            {/* ★ 全新動態化配件選單：不用修改代碼，自動抓取 GitHub 的圖檔 */}
                                             <div className="grid grid-cols-2 gap-2">
-                                                {(accTab === 'glass' ? CONFIG.glassFrames : CONFIG.louvers).map(acc => (
+                                                {(accTab === 'glass' ? dynamicAccessories.glass : dynamicAccessories.louver).map(acc => (
                                                     <button key={acc.id} onClick={async ()=>{
                                                         try {
                                                             const accHtmlImg = await loadImageSafe(`accessories/${acc.id}_白.png`);
@@ -782,7 +858,7 @@
                                                             fabricCanvas.add(img).setActiveObject(img).requestRenderAll();
                                                             setActiveMenu('acc'); 
                                                         } catch (err) {
-                                                            setToastMsg(`找不到配件：${acc.id}_白.png`);
+                                                            setToastMsg(`找不到配件預設色：${acc.id}_白.png`);
                                                             setTimeout(() => setToastMsg(''), 3000);
                                                         }
                                                     }} className="p-2 border-2 border-slate-100 bg-white rounded-xl flex flex-col items-center gap-2 active:scale-95 transition-all hover:border-blue-300 shadow-sm group">
@@ -793,6 +869,12 @@
                                                         <span className="text-[10px] font-black text-slate-700 text-center leading-tight truncate w-full">{acc.name}</span>
                                                     </button>
                                                 ))}
+                                                {/* 防呆提示：如果選單是空的 */}
+                                                {(accTab === 'glass' ? dynamicAccessories.glass : dynamicAccessories.louver).length === 0 && (
+                                                    <div className="col-span-2 text-center py-4 text-[10px] text-slate-400 font-bold border border-dashed border-slate-200 rounded-lg">
+                                                        該分類下尚未上傳配件圖檔
+                                                    </div>
+                                                )}
                                             </div>
                                         </>
                                     ) : (
@@ -842,7 +924,6 @@
                     </div>
 
                     <div className="flex-1 flex flex-col relative h-[calc(100dvh-70px)] md:h-full min-w-0 pb-[70px] md:pb-0">
-                        {/* 編輯器頂部導覽列：加入返回按鈕 */}
                         <div className="h-14 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-4 z-10 shrink-0 shadow-sm">
                             <div className="flex items-center gap-4">
                                 <button 
@@ -881,7 +962,6 @@
                         </div>
                     </div>
 
-                    {/* 手機版底部導覽列 */}
                     <div className="md:hidden fixed bottom-0 left-0 w-full h-[70px] bg-white border-t flex items-center justify-around z-50 shadow-[0_-5px_20px_rgba(0,0,0,0.05)] pb-[env(safe-area-inset-bottom)]">
                         <button onClick={()=>setActiveMenu(activeMenu==='colors'?null:'colors')} className={`nav-btn flex flex-col items-center justify-center flex-1 h-full gap-1 ${activeMenu==='colors'?'text-blue-600':'text-slate-400'}`}>
                             <div className="text-xl">🎨</div><span className="text-[10px] font-black uppercase tracking-widest">板材色</span>
