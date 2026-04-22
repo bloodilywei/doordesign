@@ -72,7 +72,7 @@
             const [authError, setAuthError] = useState('');
             
             const [activeMenu, setActiveMenu] = useState(window.innerWidth < 768 ? null : 'designs'); 
-            const [selection, setSelection] = useState({ design: '01', file: '0111.jpg', lineColor: '' });
+            const [selection, setSelection] = useState({ design: '01', file: '', lineColor: '' });
             const [fabricCanvas, setFabricCanvas] = useState(null);
             const [selectedAcc, setSelectedAcc] = useState(null);
             const [doorScale, setDoorScale] = useState(1);
@@ -82,20 +82,15 @@
             const [isScanning, setIsScanning] = useState(false);
             const [toastMsg, setToastMsg] = useState('');
             
-            const [localValidFiles, setLocalValidFiles] = useState(new Set());
+            const [localValidFiles, setLocalValidFiles] = useState({ doors: new Set(), lines: new Set() });
             const [isLocalScanning, setIsLocalScanning] = useState(false);
-            
-            // ★ 配件區的子分類狀態 (預設顯示玻璃框)
-            const [accTab, setAccTab] = useState('glass');
+            const [accTab, setAccTab] = useState('glass'); 
             
             const canvasContainerRef = useRef(null);
-
             const isLocalEnv = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-            const imgFetchOptions = isLocalEnv ? {} : { crossOrigin: 'anonymous' };
 
             const validDesigns = useMemo(() => {
                 const allDesigns = [...CONFIG.potentialDesigns].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-                
                 if (!isCloudFiltered || cloudFiles.doors.length === 0) return allDesigns; 
                 
                 const validSet = new Set();
@@ -104,12 +99,20 @@
                 
                 cloudFiles.doors.forEach(file => {
                     const lowerFile = file.toLowerCase();
+                    const match = lowerFile.match(/^([a-z0-9]+)[-_]/);
+                    if (match) {
+                        const designPart = match[1];
+                        const foundDesign = allDesigns.find(d => d.toLowerCase() === designPart);
+                        if (foundDesign) {
+                            validSet.add(foundDesign);
+                            return; 
+                        }
+                    }
                     for (const d of allDesignsByLength) {
                         const dLower = d.toLowerCase();
                         if (lowerFile.startsWith(dLower)) {
                             const remainder = lowerFile.substring(dLower.length);
                             const nextChar = remainder.charAt(0);
-                            
                             if (seriesKeys.includes(nextChar) || nextChar === '-' || nextChar === '.' || /^[a-c]$/i.test(nextChar)) {
                                 validSet.add(d);
                                 break; 
@@ -117,9 +120,44 @@
                         }
                     }
                 });
-                
                 return allDesigns.filter(d => validSet.has(d));
             }, [isCloudFiltered, cloudFiles]);
+
+            const filesForCurrentDesign = useMemo(() => {
+                if (!selection.design) return [];
+                const sourceFiles = isCloudFiltered ? cloudFiles.doors : Array.from(localValidFiles.doors);
+                const dLower = selection.design.toLowerCase();
+                
+                return sourceFiles.filter(f => {
+                    const lowerFile = f.toLowerCase();
+                    if (lowerFile.startsWith(dLower + '-') || lowerFile.startsWith(dLower + '_')) return true;
+                    if (lowerFile.startsWith(dLower)) {
+                        const remainder = lowerFile.substring(dLower.length);
+                        const nextChar = remainder.charAt(0);
+                        if (Object.keys(CONFIG.series).includes(nextChar)) return true;
+                    }
+                    return false;
+                });
+            }, [isCloudFiltered, cloudFiles.doors, localValidFiles.doors, selection.design]);
+
+            const specialOptions = useMemo(() => {
+                return filesForCurrentDesign.filter(f => {
+                    const noExt = f.toLowerCase().replace(/\.(jpg|png)$/, '');
+                    let isStandard = false;
+                    for (const tId of Object.keys(CONFIG.series)) {
+                        for (const cId of Object.keys(CONFIG.colors)) {
+                            const baseOld = `${selection.design}${tId}${cId}`.toLowerCase();
+                            const baseNew = `${selection.design}-${tId}${cId}`.toLowerCase();
+                            if (noExt === baseOld || noExt === baseNew) {
+                                isStandard = true;
+                                break;
+                            }
+                        }
+                        if (isStandard) break;
+                    }
+                    return !isStandard; 
+                });
+            }, [filesForCurrentDesign, selection.design]);
 
             const handleCheckKey = async () => {
                 if (!authKey) return;
@@ -133,18 +171,14 @@
                     
                     if (matched && new Date(matched.expiresAt) > new Date()) {
                         setIsAuthorized(true);
-                    } else {
-                        setAuthError("密碼錯誤或已過期");
-                    }
-                } catch (e) { 
-                    setAuthError("連線失敗，請檢查網路"); 
-                }
+                    } else setAuthError("密碼錯誤或已過期");
+                } catch (e) { setAuthError("連線失敗，請檢查網路"); }
             };
 
             const fetchRepoTree = async (forceRefresh = false) => {
                 setIsScanning(true);
-                const cacheKey = 'github_repo_tree_v13'; 
-                const cacheTimeKey = 'github_repo_tree_time_v13';
+                const cacheKey = 'github_repo_tree_v18'; 
+                const cacheTimeKey = 'github_repo_tree_time_v18';
                 
                 try {
                     if (isLocalEnv) {
@@ -155,7 +189,6 @@
 
                     const cached = localStorage.getItem(cacheKey);
                     const cachedTime = localStorage.getItem(cacheTimeKey);
-                    
                     if (!forceRefresh && cached && cachedTime && (Date.now() - parseInt(cachedTime) < 86400000)) {
                         setCloudFiles(JSON.parse(cached));
                         setIsCloudFiltered(true);
@@ -195,18 +228,14 @@
                             setIsCloudFiltered(true);
                             setToastMsg('API 連線受限，已恢復使用暫存目錄');
                             setTimeout(() => setToastMsg(''), 4000);
-                        } else {
-                            setIsCloudFiltered(false);
-                        }
+                        } else setIsCloudFiltered(false);
                     }
                 } catch (e) {
                     const cached = localStorage.getItem(cacheKey);
                     if (cached) {
                         setCloudFiles(JSON.parse(cached));
                         setIsCloudFiltered(true);
-                    } else {
-                        setIsCloudFiltered(false);
-                    }
+                    } else setIsCloudFiltered(false);
                 } finally {
                     setIsScanning(false);
                 }
@@ -226,17 +255,27 @@
                 
                 const scanLocalFallback = async () => {
                     setIsLocalScanning(true);
-                    const found = new Set();
+                    const foundDoors = new Set();
+                    const foundLines = new Set();
+                    
                     const check = async (folder, file) => {
                         try {
-                            const res = await fetch(`${folder}/${file}`, { method: 'HEAD' });
-                            if (res.ok) found.add(file.toLowerCase()); 
+                            const res = await fetch(`${folder}/${file}?t=${Date.now()}`, { method: 'HEAD' });
+                            const contentType = res.headers.get('content-type') || '';
+                            if (res.ok && contentType.includes('image')) {
+                                if (folder === 'doors') foundDoors.add(file);
+                                else foundLines.add(file);
+                            } 
                             else {
                                 const ext = file.split('.').pop();
                                 if (ext === 'jpg' || ext === 'png') {
                                     const upper = file.slice(0, -ext.length) + ext.toUpperCase();
-                                    const r2 = await fetch(`${folder}/${upper}`, { method: 'HEAD' });
-                                    if (r2.ok) found.add(upper.toLowerCase());
+                                    const r2 = await fetch(`${folder}/${upper}?t=${Date.now()}`, { method: 'HEAD' });
+                                    const ct2 = r2.headers.get('content-type') || '';
+                                    if (r2.ok && ct2.includes('image')) {
+                                        if (folder === 'doors') foundDoors.add(upper);
+                                        else foundLines.add(upper);
+                                    }
                                 }
                             }
                         } catch(e) {}
@@ -245,16 +284,22 @@
                     const tasks = [];
                     Object.keys(CONFIG.series).forEach(tId => {
                         Object.keys(CONFIG.colors).forEach(cId => {
+                            tasks.push(() => check('doors', `${selection.design}-${tId}${cId}.jpg`));
+                            tasks.push(() => check('doors', `${selection.design}-${tId}${cId}.png`));
                             tasks.push(() => check('doors', `${selection.design}${tId}${cId}.jpg`));
                             tasks.push(() => check('doors', `${selection.design}${tId}${cId}.png`));
-                            ["-01", "-02", "-03", "-04", "-05", "A", "B", "C"].forEach(s => {
+                            
+                            ["-01", "-02", "-03", "-04", "-05", "A", "B", "C", "-A", "-B", "-C"].forEach(s => {
+                                const sWithDash = s.startsWith('-') ? s : `-${s}`;
+                                tasks.push(() => check('doors', `${selection.design}-${tId}${cId}${sWithDash}.jpg`));
+                                tasks.push(() => check('doors', `${selection.design}-${tId}${cId}${sWithDash}.png`));
                                 tasks.push(() => check('doors', `${selection.design}${tId}${cId}${s}.jpg`));
-                                tasks.push(() => check('doors', `${selection.design}${tId}${cId}${s}.png`));
                             });
                         });
                     });
                     Object.keys(CONFIG.lineColors).forEach(lc => {
                         tasks.push(() => check('lines', `${selection.design}_${lc}.png`));
+                        tasks.push(() => check('lines', `${selection.design}-${lc}.png`));
                     });
 
                     const CHUNK_SIZE = 15;
@@ -264,81 +309,27 @@
                         await new Promise(r => setTimeout(r, 30));
                     }
                     
-                    setLocalValidFiles(found);
+                    setLocalValidFiles({ doors: foundDoors, lines: foundLines });
                     setIsLocalScanning(false);
                 };
                 scanLocalFallback();
             }, [selection.design, isCloudFiltered, isAuthorized]);
 
-            const hasDoorFile = (filename) => {
-                const lower = filename.toLowerCase();
-                if (isCloudFiltered) return cloudFiles.doors.some(f => f.toLowerCase() === lower);
-                return Array.from(localValidFiles).some(f => f.toLowerCase() === lower);
-            };
-            
             const hasLineFile = (filename) => {
                 const lower = filename.toLowerCase();
                 if (isCloudFiltered) return cloudFiles.lines.some(f => f.toLowerCase() === lower);
-                return Array.from(localValidFiles).some(f => f.toLowerCase() === lower);
+                return Array.from(localValidFiles.lines).some(f => f.toLowerCase() === lower);
             };
 
-            const specialOptions = useMemo(() => {
-                const valid = [];
-                const designLower = selection.design.toLowerCase();
-                const sourceFiles = isCloudFiltered ? cloudFiles.doors : Array.from(localValidFiles);
-                const allDesignsByLength = [...CONFIG.potentialDesigns].sort((a, b) => b.length - a.length);
-                const seriesKeys = Object.keys(CONFIG.series);
-
-                sourceFiles.forEach(f => {
-                    const lowerFile = f.toLowerCase();
-                    if (lowerFile.includes('-')) {
-                        for (const d of allDesignsByLength) {
-                            if (lowerFile.startsWith(d.toLowerCase())) {
-                                const remainder = lowerFile.substring(d.length);
-                                const nextChar = remainder.charAt(0);
-                                if (seriesKeys.includes(nextChar) || nextChar === '-') {
-                                    if (d === selection.design) valid.push(f);
-                                    break; 
-                                }
-                            }
-                        }
-                    }
-                });
-                return valid;
-            }, [isCloudFiltered, cloudFiles.doors, localValidFiles, selection.design]);
-
-            const currentDesignFiles = useMemo(() => {
-                const valid = [];
-                const extendedSuffixes = ["", "-01", "-02", "-03", "-04", "-05", "A", "B", "C", "a", "b", "c"];
-
-                Object.keys(CONFIG.series).forEach(tId => {
-                    Object.keys(CONFIG.colors).forEach(cId => {
-                        const base = `${selection.design}${tId}${cId}`;
-                        extendedSuffixes.forEach(s => {
-                            const targetBase = `${base}${s}`;
-                            if (isCloudFiltered) {
-                                const match = cloudFiles.doors.find(f => f.toLowerCase() === `${targetBase}.jpg`.toLowerCase() || f.toLowerCase() === `${targetBase}.png`.toLowerCase());
-                                if (match) valid.push(match);
-                            } else {
-                                const match = Array.from(localValidFiles).find(f => f.toLowerCase() === `${targetBase}.jpg`.toLowerCase() || f.toLowerCase() === `${targetBase}.png`.toLowerCase());
-                                if (match) valid.push(match);
-                            }
-                        });
-                    });
-                });
-                specialOptions.forEach(f => { if (!valid.includes(f)) valid.push(f); });
-                return valid;
-            }, [selection.design, isCloudFiltered, cloudFiles.doors, localValidFiles, specialOptions]);
-
             useEffect(() => {
-                if (currentDesignFiles.length > 0) {
-                    const currentLower = selection.file.toLowerCase();
-                    const isCurrentValid = currentDesignFiles.some(f => f.toLowerCase() === currentLower);
+                if (filesForCurrentDesign.length > 0) {
+                    const currentLower = (selection.file || '').toLowerCase();
+                    const isCurrentValid = filesForCurrentDesign.some(f => f.toLowerCase() === currentLower);
                     if (!isCurrentValid) {
-                        setSelection(prev => ({ ...prev, file: currentDesignFiles[0] }));
+                        setSelection(prev => ({ ...prev, file: filesForCurrentDesign[0] }));
                     }
                 }
-            }, [currentDesignFiles, selection.file]);
+            }, [filesForCurrentDesign, selection.file]);
 
             const loadImageSafe = (url) => {
                 return new Promise((resolve, reject) => {
@@ -397,9 +388,12 @@
                 return () => { window.removeEventListener('resize', handleResize); clearTimeout(timer); };
             }, [isAuthorized, fabricCanvas, activeMenu]);
 
+            // ★ 無殘影繪圖引擎：徹底解決非同步疊圖 (Race Condition) 問題
             useEffect(() => {
                 if (!fabricCanvas || !selection.file) return;
                 
+                let isCancelled = false; // 攔截非同步請求的標記
+
                 const container = document.getElementById('canvas-container-wrapper');
                 const cw = container?.clientWidth || 800;
                 const ch = container?.clientHeight || 600;
@@ -410,13 +404,24 @@
                 
                 const drawCanvas = async () => {
                     try {
+                        // 1. 操作剛開始，立刻先把舊圖瞬間清空！確保畫面乾淨不重疊
+                        fabricCanvas.getObjects().forEach(obj => {
+                            if (['door', 'lineLayer', 'errorText', 'errorBg'].includes(obj.id)) fabricCanvas.remove(obj);
+                        });
+                        fabricCanvas.requestRenderAll();
+
+                        // 2. 開始下載新圖 (這需要花一點時間)
+                        const doorHtmlImg = await loadImageSafe(`doors/${actualDoorFile}`);
+                        
+                        // 3. ★ 核心防護：如果在這段等待時間內，使用者又點了別的按鈕，這個舊指令就直接作廢！
+                        if (isCancelled) return;
+                        
+                        // 保險起見，貼上新圖前再清一次
                         fabricCanvas.getObjects().forEach(obj => {
                             if (['door', 'lineLayer', 'errorText', 'errorBg'].includes(obj.id)) fabricCanvas.remove(obj);
                         });
 
-                        const doorHtmlImg = await loadImageSafe(`doors/${actualDoorFile}`);
                         const doorImg = new fabric.Image(doorHtmlImg);
-                        
                         const newScale = Math.min((cw * 0.95) / doorImg.width, (ch * 0.95) / doorImg.height);
                         setDoorScale(newScale);
 
@@ -427,23 +432,27 @@
                         fabricCanvas.add(doorImg).sendToBack(doorImg);
 
                         if (selection.lineColor) {
-                            let targetLineFile = `${selection.design}_${selection.lineColor}.png`;
-                            if (isCloudFiltered) {
-                                const match = cloudFiles.lines.find(f => f.toLowerCase() === targetLineFile.toLowerCase());
-                                if (match) targetLineFile = match;
-                            } else {
-                                const match = Array.from(localValidFiles).find(f => f.toLowerCase() === targetLineFile.toLowerCase());
-                                if (match) targetLineFile = match;
-                            }
+                            const targetOld = `${selection.design}_${selection.lineColor}.png`.toLowerCase();
+                            const targetNew = `${selection.design}-${selection.lineColor}.png`.toLowerCase();
+                            let targetLineFile = `${selection.design}_${selection.lineColor}.png`; 
+                            
+                            const sourceLines = isCloudFiltered ? cloudFiles.lines : Array.from(localValidFiles.lines);
+                            const exactLineMatch = sourceLines.find(f => {
+                                const lower = f.toLowerCase();
+                                return lower === targetOld || lower === targetNew;
+                            });
+                            if (exactLineMatch) targetLineFile = exactLineMatch;
                             
                             try {
                                 const lineHtmlImg = await loadImageSafe(`lines/${targetLineFile}`);
+                                if (isCancelled) return; // 下載線條期間如果被切換也作廢
+                                
                                 const lineImg = new fabric.Image(lineHtmlImg);
                                 lineImg.set({ 
                                     scaleX: (doorImg.width * newScale) / lineImg.width, 
                                     scaleY: (doorImg.height * newScale) / lineImg.height, 
                                     selectable: false, id: 'lineLayer', evented: false, 
-                                    originX: 'center', originY: 'center', left: doorImg.left, top: doorImg.top 
+                                    originX: 'center', originY: 'center', left: cw / 2, top: ch / 2 
                                 });
                                 fabricCanvas.add(lineImg);
                                 lineImg.moveTo(1); 
@@ -452,6 +461,8 @@
                         fabricCanvas.requestRenderAll();
 
                     } catch (error) {
+                        if (isCancelled) return; // 發生錯誤時如果被切換也作廢
+                        
                         const errorBg = new fabric.Rect({
                             id: 'errorBg', left: cw / 2, top: ch / 2, originX: 'center', originY: 'center',
                             width: 320, height: 100, rx: 15, ry: 15, fill: 'rgba(255, 255, 255, 0.9)',
@@ -469,6 +480,9 @@
                 };
 
                 drawCanvas();
+                
+                // 清理函數：當 selection 改變，立刻將 isCancelled 設為 true 攔截舊請求
+                return () => { isCancelled = true; };
             }, [selection, fabricCanvas, isCloudFiltered, cloudFiles, localValidFiles]);
 
             const handleDownload = () => {
@@ -478,6 +492,18 @@
                 link.download = fileName;
                 link.href = fabricCanvas.toDataURL({ format: 'png', multiplier: 2 });
                 link.click();
+            };
+
+            // ★ 一鍵清除所有配件
+            const handleClearAccessories = () => {
+                if (!fabricCanvas) return;
+                const accs = fabricCanvas.getObjects().filter(obj => obj.id?.startsWith('acc'));
+                if (accs.length === 0) return;
+                accs.forEach(acc => fabricCanvas.remove(acc));
+                fabricCanvas.requestRenderAll();
+                setSelectedAcc(null);
+                setToastMsg('已清除所有配件');
+                setTimeout(() => setToastMsg(''), 2000);
             };
 
             if (!isAuthorized) {
@@ -550,7 +576,7 @@
                                                 <div className="w-full h-1.5 bg-slate-200 rounded-full"></div><span className="text-[9px] font-bold text-slate-600">原樣</span>
                                             </button>
                                             {Object.entries(CONFIG.lineColors).map(([lc, d]) => {
-                                                if (!hasLineFile(`${selection.design}_${lc}.png`)) return null;
+                                                if (!hasLineFile(`${selection.design}_${lc}.png`) && !hasLineFile(`${selection.design}-${lc}.png`)) return null;
                                                 return (
                                                     <button key={lc} onClick={()=>setSelection({...selection, lineColor:lc})} className={`p-2 border-2 rounded-lg flex flex-col items-center gap-1 ${selection.lineColor===lc?'border-blue-500 bg-blue-50':'border-slate-100'}`}>
                                                         <div className="w-full h-1.5 rounded-full border border-slate-200" style={{backgroundColor: d.hex}}></div><span className="text-[9px] font-bold text-slate-600">{d.name}</span>
@@ -562,8 +588,12 @@
                                     
                                     {Object.entries(CONFIG.series).map(([tId, tName]) => {
                                         const seriesColors = Object.entries(CONFIG.colors).filter(([cId]) => {
-                                            const base = `${selection.design}${tId}${cId}`;
-                                            return hasDoorFile(`${base}.jpg`) || hasDoorFile(`${base}.png`);
+                                            const baseOld = `${selection.design}${tId}${cId}`.toLowerCase();
+                                            const baseNew = `${selection.design}-${tId}${cId}`.toLowerCase();
+                                            return filesForCurrentDesign.some(f => {
+                                                const lower = f.toLowerCase();
+                                                return lower.startsWith(baseOld) || lower.startsWith(baseNew);
+                                            });
                                         });
                                         if (seriesColors.length === 0) return null;
 
@@ -572,15 +602,21 @@
                                                 <p className="text-[10px] font-black text-slate-500 mb-2 border-l-2 border-slate-300 pl-1 uppercase">{tName}</p>
                                                 <div className="grid grid-cols-2 gap-2">
                                                     {seriesColors.map(([cId, c]) => {
-                                                        const targetBase = `${selection.design}${tId}${cId}`;
-                                                        let exactFile = `${targetBase}.jpg`;
-                                                        if (isCloudFiltered) {
-                                                            const match = cloudFiles.doors.find(f => f.toLowerCase() === `${targetBase}.jpg`.toLowerCase() || f.toLowerCase() === `${targetBase}.png`.toLowerCase());
-                                                            if (match) exactFile = match;
-                                                        } else {
-                                                            const match = Array.from(localValidFiles).find(f => f.toLowerCase() === `${targetBase}.jpg`.toLowerCase() || f.toLowerCase() === `${targetBase}.png`.toLowerCase());
-                                                            if (match) exactFile = match;
+                                                        const baseOld = `${selection.design}${tId}${cId}`.toLowerCase();
+                                                        const baseNew = `${selection.design}-${tId}${cId}`.toLowerCase();
+                                                        
+                                                        let exactFile = filesForCurrentDesign.find(f => {
+                                                            const noExt = f.toLowerCase().replace(/\.(jpg|png)$/, '');
+                                                            return noExt === baseOld || noExt === baseNew;
+                                                        });
+                                                        
+                                                        if (!exactFile) {
+                                                            exactFile = filesForCurrentDesign.find(f => {
+                                                                const lower = f.toLowerCase();
+                                                                return lower.startsWith(baseOld) || lower.startsWith(baseNew);
+                                                            });
                                                         }
+                                                        if (!exactFile) exactFile = `${selection.design}-${tId}${cId}.jpg`;
 
                                                         return (
                                                             <button key={cId} onClick={()=>setSelection({...selection, file:exactFile})} className={`p-2 border-2 rounded-xl flex flex-col items-center gap-1 transition-all bg-white ${selection.file===exactFile?'border-rose-500 shadow-md ring-2 ring-rose-50':'border-slate-100 hover:border-slate-300'}`}>
@@ -613,9 +649,13 @@
                                 <div className="flex flex-col gap-4 pb-6">
                                     {!selectedAcc ? (
                                         <>
+                                            {/* ★ 新增：一鍵清除所有配件按鈕 */}
+                                            <button onClick={handleClearAccessories} className="w-full py-2 bg-rose-50 text-rose-500 rounded-lg border border-rose-200 text-[10px] font-black hover:bg-rose-100 active:scale-95 transition-all flex items-center justify-center gap-1 shadow-sm">
+                                                🗑️ 一鍵清除所有配件
+                                            </button>
+
                                             <div className="bg-emerald-50 text-emerald-600 text-[10px] font-bold p-3 rounded-lg border border-emerald-100 mb-2 text-center">點擊加入畫布，或點選畫布上配件編輯</div>
                                             
-                                            {/* ★ 新增：配件子分類切換按鈕 */}
                                             <div className="flex gap-2 mb-2">
                                                 <button onClick={() => setAccTab('glass')} className={`flex-1 py-2 text-[10px] font-black rounded-lg border-2 transition-all ${accTab === 'glass' ? 'border-blue-500 bg-blue-50 text-blue-600 shadow-sm' : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'}`}>
                                                     玻璃框
@@ -625,7 +665,6 @@
                                                 </button>
                                             </div>
 
-                                            {/* ★ 修正：根據目前選中的子分類來顯示對應的清單 */}
                                             {(accTab === 'glass' ? CONFIG.glassFrames : CONFIG.louvers).map(acc => (
                                                 <button key={acc.id} onClick={async ()=>{
                                                     try {
@@ -720,7 +759,6 @@
                         </div>
                     </div>
 
-                    {/* 手機版下方導覽列與下載按鈕 */}
                     <div className="md:hidden absolute bottom-0 left-0 w-full h-20 bg-white border-t flex items-center justify-around z-30 shadow-[0_-5px_20px_rgba(0,0,0,0.05)] pb-4 px-2">
                         <button onClick={()=>setActiveMenu(activeMenu==='designs'?null:'designs')} className={`nav-btn flex flex-col items-center justify-center flex-1 h-full gap-1 ${activeMenu==='designs'?'text-blue-600':'text-slate-400'}`}>
                             <div className="text-xl">🔲</div><span className="text-[10px] font-black uppercase tracking-widest">選造型</span>
