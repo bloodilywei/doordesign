@@ -77,21 +77,55 @@
             const [selectedAcc, setSelectedAcc] = useState(null);
             const [doorScale, setDoorScale] = useState(1);
             
-            const [toastMsg, setToastMsg] = useState('');
-            const canvasContainerRef = useRef(null);
-
-            // ==========================================
-            // ★ 核心引擎狀態
-            // ==========================================
-            // 雲端全域清單
+            // 雲端目錄狀態
             const [cloudFiles, setCloudFiles] = useState({ doors: [], lines: [] });
             const [isCloudFiltered, setIsCloudFiltered] = useState(false); 
-            
-            // 當前選中型號的「可用檔案清單」(Map結構：小寫 -> 實際大小寫檔名)
-            const [currentAvailable, setCurrentAvailable] = useState({ doors: new Map(), lines: new Map() });
             const [isScanning, setIsScanning] = useState(false);
+            const [toastMsg, setToastMsg] = useState('');
+            
+            // 備用局部掃描狀態 (當 GitHub API 額度耗盡時啟動)
+            const [localValidFiles, setLocalValidFiles] = useState(new Set());
+            const [isLocalScanning, setIsLocalScanning] = useState(false);
+            
+            const canvasContainerRef = useRef(null);
 
-            // Firebase 登入
+            const isLocalEnv = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+            const imgFetchOptions = isLocalEnv ? {} : { crossOrigin: 'anonymous' };
+
+            // =========================================================
+            // ★ 核心優化：由長到短精準比對，徹底解決 751 被誤判為 75 的問題
+            // =========================================================
+            const validDesigns = useMemo(() => {
+                const allDesigns = [...CONFIG.potentialDesigns].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+                if (!isCloudFiltered || cloudFiles.doors.length === 0) return allDesigns; 
+                
+                const validSet = new Set();
+                const seriesKeys = Object.keys(CONFIG.series);
+                
+                // ★ 秘訣：將型號由長排到短 (如 751 排在 75 前面)
+                const allDesignsByLength = [...allDesigns].sort((a, b) => b.length - a.length);
+                
+                cloudFiles.doors.forEach(file => {
+                    const lowerFile = file.toLowerCase();
+                    for (const d of allDesignsByLength) {
+                        const dLower = d.toLowerCase();
+                        if (lowerFile.startsWith(dLower)) {
+                            const remainder = lowerFile.substring(dLower.length);
+                            // 確認剩下的字串是合法系列(1,2,3,5,6)或跳色橫槓(-01)
+                            const isValidSeries = seriesKeys.some(sId => remainder.startsWith(sId));
+                            const isSpecial = remainder.startsWith('-');
+                            if (isValidSeries || isSpecial || remainder === '.jpg' || remainder === '.png') {
+                                validSet.add(d);
+                                break; // 該圖檔已找到最長且精確的主人，立刻停止比對，防止 75 搶走 751 的圖檔
+                            }
+                        }
+                    }
+                });
+                
+                // 最後再用正確的數字大小排序輸出
+                return allDesigns.filter(d => validSet.has(d));
+            }, [isCloudFiltered, cloudFiles]);
+
             const checkKey = async (key) => {
                 const targetKey = key || authKey;
                 if (!targetKey) return;
@@ -114,17 +148,26 @@
                 if (saved) checkKey(saved);
             }, []);
 
-            // 第一層防護：同步 GitHub 全目錄
+            // 1. 同步 GitHub 目錄 (快取 24 小時，徹底免去封鎖)
             const fetchRepoTree = async () => {
-                const cacheKey = 'github_repo_tree_v6';
-                const cacheTimeKey = 'github_repo_tree_time_v6';
+                setIsScanning(true);
+                const cacheKey = 'github_repo_tree_v7'; // 升級快取版本
+                const cacheTimeKey = 'github_repo_tree_time_v7';
+                
                 try {
+                    if (isLocalEnv) {
+                        setIsCloudFiltered(false);
+                        setIsScanning(false);
+                        return;
+                    }
+
                     const cached = localStorage.getItem(cacheKey);
                     const cachedTime = localStorage.getItem(cacheTimeKey);
-                    // 快取 24 小時有效
+                    // 快取保留 24 小時 (86400000 毫秒)
                     if (cached && cachedTime && (Date.now() - parseInt(cachedTime) < 86400000)) {
                         setCloudFiles(JSON.parse(cached));
                         setIsCloudFiltered(true);
+                        setIsScanning(false);
                         return;
                     }
 
@@ -151,10 +194,15 @@
                         localStorage.setItem(cacheKey, JSON.stringify(filesObj));
                         localStorage.setItem(cacheTimeKey, Date.now().toString());
                     } else {
-                        setIsCloudFiltered(false); // API 限流，轉為備用模式
+                        // 遇到 API Rate Limit
+                        setIsCloudFiltered(false);
+                        setToastMsg('API 次數用盡，切換為備用顯示模式');
+                        setTimeout(() => setToastMsg(''), 4000);
                     }
                 } catch (e) {
                     setIsCloudFiltered(false);
+                } finally {
+                    setIsScanning(false);
                 }
             };
 
@@ -163,110 +211,63 @@
                 fetchRepoTree();
             }, [isAuthorized]);
 
-            // 第二層防護與更新選單：當使用者點擊某個「造型」時，產生它的專屬可用清單
+            // 2. 備用防線：當 GitHub API 被封鎖時，局部掃描當前顏色
             useEffect(() => {
-                if (!isAuthorized || !selection.design) return;
+                if (!isAuthorized || isCloudFiltered || !selection.design) return;
+                
+                const scanLocalFallback = async () => {
+                    setIsLocalScanning(true);
+                    const found = new Set();
+                    const check = async (folder, file) => {
+                        try {
+                            const res = await fetch(`${folder}/${file}`, { method: 'HEAD' });
+                            if (res.ok) found.add(file.toLowerCase());
+                        } catch(e) {}
+                    };
 
-                let isCancelled = false;
-                const dMap = new Map();
-                const lMap = new Map();
-
-                if (isCloudFiltered) {
-                    // API 成功：直接從全目錄過濾，瞬間完成
-                    cloudFiles.doors.forEach(f => {
-                        if (f.toLowerCase().startsWith(selection.design.toLowerCase())) {
-                            dMap.set(f.toLowerCase(), f);
-                        }
-                    });
-                    cloudFiles.lines.forEach(f => {
-                        if (f.toLowerCase().startsWith(selection.design.toLowerCase())) {
-                            lMap.set(f.toLowerCase(), f);
-                        }
-                    });
-                    setCurrentAvailable({ doors: dMap, lines: lMap });
-                } else {
-                    // API 失敗：啟動防 DDoS 緩速掃描器，只找當前的造型
-                    const scanFallback = async () => {
-                        setIsScanning(true);
-                        const tasks = [];
-                        
-                        const checkAndAdd = async (folder, file) => {
-                            try {
-                                const res = await fetch(`${folder}/${file}`, { method: 'HEAD' });
-                                if (res.ok) {
-                                    if (folder === 'doors') dMap.set(file.toLowerCase(), file);
-                                    if (folder === 'lines') lMap.set(file.toLowerCase(), file);
-                                    return;
-                                }
-                                // 大寫副檔名防呆
-                                const ext = file.split('.').pop();
-                                if (ext === 'jpg' || ext === 'png') {
-                                    const upper = file.slice(0, -ext.length) + ext.toUpperCase();
-                                    const r2 = await fetch(`${folder}/${upper}`, { method: 'HEAD' });
-                                    if (r2.ok) {
-                                        if (folder === 'doors') dMap.set(upper.toLowerCase(), upper);
-                                        if (folder === 'lines') lMap.set(upper.toLowerCase(), upper);
-                                    }
-                                }
-                            } catch(e) {}
-                        };
-
-                        Object.keys(CONFIG.series).forEach(tId => {
-                            Object.keys(CONFIG.colors).forEach(cId => {
-                                tasks.push(() => checkAndAdd('doors', `${selection.design}${tId}${cId}.jpg`));
-                                tasks.push(() => checkAndAdd('doors', `${selection.design}${tId}${cId}.png`));
-                                ["-01", "-02", "-03", "-04", "-05", "A", "B", "C", "-A", "-B", "-C"].forEach(s => {
-                                    tasks.push(() => checkAndAdd('doors', `${selection.design}${tId}${cId}${s}.jpg`));
-                                });
+                    const tasks = [];
+                    Object.keys(CONFIG.series).forEach(tId => {
+                        Object.keys(CONFIG.colors).forEach(cId => {
+                            tasks.push(() => check('doors', `${selection.design}${tId}${cId}.jpg`));
+                            tasks.push(() => check('doors', `${selection.design}${tId}${cId}.png`));
+                            ["-01", "-02", "-03", "-04", "-05", "A", "B", "C", "-A", "-B", "-C"].forEach(s => {
+                                tasks.push(() => check('doors', `${selection.design}${tId}${cId}${s}.jpg`));
                             });
                         });
-                        Object.keys(CONFIG.lineColors).forEach(lc => {
-                            tasks.push(() => checkAndAdd('lines', `${selection.design}_${lc}.png`));
-                        });
+                    });
+                    Object.keys(CONFIG.lineColors).forEach(lc => {
+                        tasks.push(() => check('lines', `${selection.design}_${lc}.png`));
+                    });
 
-                        // 每次發 10 個請求，並強制休息 50ms (絕對不會被封鎖)
-                        const CHUNK = 10;
-                        for (let i = 0; i < tasks.length; i += CHUNK) {
-                            if (isCancelled) return;
-                            await Promise.all(tasks.slice(i, i + CHUNK).map(t => t()));
-                            await new Promise(r => setTimeout(r, 50));
-                        }
-
-                        if (!isCancelled) {
-                            setCurrentAvailable({ doors: dMap, lines: lMap });
-                            setIsScanning(false);
-                        }
-                    };
-                    scanFallback();
-                }
-
-                return () => { isCancelled = true; };
-            }, [selection.design, isAuthorized, isCloudFiltered, cloudFiles]);
-
-            // 過濾空按鈕：雲端有目錄就用雲端過濾，API失效時顯示全部(盲選)
-            const validDesigns = useMemo(() => {
-                const allDesigns = [...CONFIG.potentialDesigns].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-                if (!isCloudFiltered) return allDesigns; 
-                
-                const extendedSuffixes = ["-01", "-02", "-03", "-04", "-05", "-06", "-07", "-08", "-09", "-1", "-2", "-3", "-4", "-5", "A", "B", "C", "-A", "-B", "-C"];
-                return allDesigns.filter(designId => {
-                    for (const tId of Object.keys(CONFIG.series)) {
-                        for (const cId of Object.keys(CONFIG.colors)) {
-                            const base = `${designId}${tId}${cId}`.toLowerCase();
-                            if (cloudFiles.doors.some(f => f.toLowerCase() === `${base}.jpg` || f.toLowerCase() === `${base}.png`)) return true;
-                            for (const s of extendedSuffixes) {
-                                const spec = `${base}${s.toLowerCase()}`;
-                                if (cloudFiles.doors.some(f => f.toLowerCase() === `${spec}.jpg` || f.toLowerCase() === `${spec}.png`)) return true;
-                            }
-                        }
+                    // 慢速排隊，保證不觸發 DDoS
+                    const CHUNK_SIZE = 15;
+                    for (let i = 0; i < tasks.length; i += CHUNK_SIZE) {
+                        const chunk = tasks.slice(i, i + CHUNK_SIZE);
+                        await Promise.all(chunk.map(t => t()));
+                        await new Promise(r => setTimeout(r, 60));
                     }
-                    return false;
-                });
-            }, [isCloudFiltered, cloudFiles]);
+
+                    setLocalValidFiles(found);
+                    setIsLocalScanning(false);
+                };
+                scanLocalFallback();
+            }, [selection.design, isCloudFiltered, isAuthorized]);
+
+            const hasDoorFile = (filename) => {
+                const lower = filename.toLowerCase();
+                if (isCloudFiltered) return cloudFiles.doors.some(f => f.toLowerCase() === lower);
+                return localValidFiles.has(lower);
+            };
+            
+            const hasLineFile = (filename) => {
+                const lower = filename.toLowerCase();
+                if (isCloudFiltered) return cloudFiles.lines.some(f => f.toLowerCase() === lower);
+                return localValidFiles.has(lower);
+            };
 
             const handleRefreshCache = () => {
-                localStorage.removeItem('github_repo_tree_v6');
-                localStorage.removeItem('github_repo_tree_time_v6');
+                localStorage.removeItem('github_repo_tree_v7');
+                localStorage.removeItem('github_repo_tree_time_v7');
                 fetchRepoTree();
                 setToastMsg('圖庫目錄已強制更新！');
                 setTimeout(() => setToastMsg(''), 3000);
@@ -275,9 +276,9 @@
             const loadImageSafe = (url) => {
                 return new Promise((resolve, reject) => {
                     const img = new window.Image();
-                    // 在 Github Pages (同網域) 下，不加 crossOrigin 反而最穩定
+                    if (!isLocalEnv) img.crossOrigin = 'anonymous'; 
                     img.onload = () => resolve(img);
-                    img.onerror = () => reject(new Error(`無法載入: ${url}`));
+                    img.onerror = () => reject(new Error(`無法載入圖片: ${url}`));
                     img.src = url;
                 });
             };
@@ -330,7 +331,7 @@
                 return () => { window.removeEventListener('resize', handleResize); clearTimeout(timer); };
             }, [isAuthorized, fabricCanvas, activeMenu]);
 
-            // ★ 強韌繪圖引擎 (錯誤時顯示文字)
+            // 強韌繪圖引擎
             useEffect(() => {
                 if (!fabricCanvas || !selection.file) return;
                 
@@ -350,8 +351,7 @@
 
                         const doorHtmlImg = await loadImageSafe(`doors/${actualDoorFile}`);
                         const doorImg = new fabric.Image(doorHtmlImg);
-                        setToastMsg(''); 
-
+                        
                         const newScale = Math.min((cw * 0.95) / doorImg.width, (ch * 0.95) / doorImg.height);
                         setDoorScale(newScale);
 
@@ -363,10 +363,10 @@
 
                         if (selection.lineColor) {
                             let targetLineFile = `${selection.design}_${selection.lineColor}.png`;
-                            // 從 Map 中獲取正確大小寫
-                            const exactLine = currentAvailable.lines.get(targetLineFile.toLowerCase());
-                            if (exactLine) targetLineFile = exactLine;
-
+                            if (isCloudFiltered) {
+                                const match = cloudFiles.lines.find(f => f.toLowerCase() === targetLineFile.toLowerCase());
+                                if (match) targetLineFile = match;
+                            }
                             try {
                                 const lineHtmlImg = await loadImageSafe(`lines/${targetLineFile}`);
                                 const lineImg = new fabric.Image(lineHtmlImg);
@@ -383,9 +383,6 @@
                         fabricCanvas.requestRenderAll();
 
                     } catch (error) {
-                        setToastMsg(`圖檔不存在：${actualDoorFile}`);
-                        setTimeout(() => setToastMsg(''), 3000);
-
                         const errorBg = new fabric.Rect({
                             id: 'errorBg', left: cw / 2, top: ch / 2, originX: 'center', originY: 'center',
                             width: 320, height: 100, rx: 15, ry: 15, fill: 'rgba(255, 255, 255, 0.9)',
@@ -403,10 +400,16 @@
                 };
 
                 drawCanvas();
-            }, [selection, fabricCanvas, currentAvailable]);
+            }, [selection, fabricCanvas, isLocalEnv, isCloudFiltered, cloudFiles]);
 
-            // 特殊跳色組合款過濾
-            const specialOptions = Array.from(currentAvailable.doors.values()).filter(f => f.includes('-'));
+            const getSpecialOptions = () => {
+                if (isCloudFiltered) {
+                    return cloudFiles.doors.filter(f => f.toLowerCase().startsWith(selection.design.toLowerCase()) && f.includes('-'));
+                } else {
+                    return Array.from(localValidFiles).filter(f => f.includes('-'));
+                }
+            };
+            const specialOptions = getSpecialOptions();
 
             const handleDownload = () => {
                 if (!fabricCanvas) return;
@@ -455,15 +458,18 @@
                         </div>
 
                         <div className="flex-1 overflow-y-auto p-3 custom-scrollbar bg-slate-50/30 tab-content relative">
-                            {isScanning && (
+                            {(isScanning || isLocalScanning) && (
                                 <div className="absolute inset-0 bg-white/80 z-10 flex flex-col items-center justify-center">
                                     <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-2"></div>
-                                    <span className="text-xs font-bold text-blue-600">正在掃描圖庫...</span>
+                                    <span className="text-xs font-bold text-blue-600">讀取目錄與過濾中...</span>
                                 </div>
                             )}
                             
                             {activeMenu === 'designs' && (
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                    {validDesigns.length === 0 && !isScanning && (
+                                        <div className="col-span-full text-center py-10 text-[10px] text-slate-400 font-bold border-2 border-dashed border-slate-200 rounded-xl mx-2">尚未上傳任何圖檔</div>
+                                    )}
                                     {validDesigns.map(id => (
                                         <button key={id} onClick={()=>{
                                             setSelection({...selection, design:id}); 
@@ -484,8 +490,7 @@
                                                 <div className="w-full h-1.5 bg-slate-200 rounded-full"></div><span className="text-[9px] font-bold text-slate-600">原樣</span>
                                             </button>
                                             {Object.entries(CONFIG.lineColors).map(([lc, d]) => {
-                                                const target = `${selection.design}_${lc}.png`.toLowerCase();
-                                                if (!currentAvailable.lines.has(target)) return null;
+                                                if (!hasLineFile(`${selection.design}_${lc}.png`)) return null;
                                                 return (
                                                     <button key={lc} onClick={()=>setSelection({...selection, lineColor:lc})} className={`p-2 border-2 rounded-lg flex flex-col items-center gap-1 ${selection.lineColor===lc?'border-blue-500 bg-blue-50':'border-slate-100'}`}>
                                                         <div className="w-full h-1.5 rounded-full border border-slate-200" style={{backgroundColor: d.hex}}></div><span className="text-[9px] font-bold text-slate-600">{d.name}</span>
@@ -497,8 +502,7 @@
                                     
                                     {Object.entries(CONFIG.series).map(([tId, tName]) => {
                                         const seriesColors = Object.entries(CONFIG.colors).filter(([cId]) => {
-                                            const base = `${selection.design}${tId}${cId}`.toLowerCase();
-                                            return currentAvailable.doors.has(`${base}.jpg`) || currentAvailable.doors.has(`${base}.png`);
+                                            return hasDoorFile(`${selection.design}${tId}${cId}.jpg`) || hasDoorFile(`${selection.design}${tId}${cId}.png`);
                                         });
                                         if (seriesColors.length === 0) return null;
 
@@ -507,8 +511,14 @@
                                                 <p className="text-[10px] font-black text-slate-500 mb-2 border-l-2 border-slate-300 pl-1 uppercase">{tName}</p>
                                                 <div className="grid grid-cols-2 gap-2">
                                                     {seriesColors.map(([cId, c]) => {
-                                                        const targetBase = `${selection.design}${tId}${cId}`.toLowerCase();
-                                                        let exactFile = currentAvailable.doors.get(`${targetBase}.jpg`) || currentAvailable.doors.get(`${targetBase}.png`);
+                                                        const targetBase = `${selection.design}${tId}${cId}`;
+                                                        let exactFile = `${targetBase}.jpg`;
+                                                        if (isCloudFiltered) {
+                                                            const match = cloudFiles.doors.find(f => f.toLowerCase() === `${targetBase}.jpg`.toLowerCase() || f.toLowerCase() === `${targetBase}.png`.toLowerCase());
+                                                            if (match) exactFile = match;
+                                                        } else if (localValidFiles.has(`${targetBase}.png`.toLowerCase())) {
+                                                            exactFile = `${targetBase}.png`;
+                                                        }
 
                                                         return (
                                                             <button key={cId} onClick={()=>setSelection({...selection, file:exactFile})} className={`p-2 border-2 rounded-xl flex flex-col items-center gap-1 transition-all bg-white ${selection.file===exactFile?'border-rose-500 shadow-md ring-2 ring-rose-50':'border-slate-100 hover:border-slate-300'}`}>
