@@ -63,7 +63,8 @@
             glassFrames: [ { id: "GLS_G-01_467×725", name: "玻璃框 G-01" }, { id: "GLS_T_08_200×605", name: "玻璃框 T-08" }, { id: "GLS_T_09_370×605", name: "玻璃框 T-09" }, { id: "GLS_T_16_200×200", name: "玻璃框 T-16" }, { id: "GLS_T_17_250×950", name: "玻璃框 T-17" } ],
             louvers: [ { id: "LOU_A-03_378×230", name: "百頁 A-03" }, { id: "LOU_A-04_200×650", name: "百頁 A-04" }, { id: "LOU_A-05_400×650", name: "百頁 A-05" }, { id: "LOU_A-13_250×297", name: "百頁 A-13" } ],
             accColors: [ { id: "白", name: "白色", hex: "#FFFFFF" }, { id: "柚木", name: "柚木色", hex: "#966F33" }, { id: "胡桃", name: "胡桃色", hex: "#5D4037" } ],
-            potentialDesigns: ["110", "120", "122", "123", "125", "126", "141", "144", "150", "151", "152", "153", "305", "306", "307", "308", "309", "401", "501", "502", "503", "504", "601", "602", "605", "650", "651", "751", "752", "755", "760", "761", "762", "763", "764", "765", "780", "790", "791", "802", "880", "900", "01", "02", "04", "07", "08", "11", "14", "15", "16", "20", "30", "50", "51", "54", "58", "60", "61", "62", "63", "64", "65", "75", "76", "78", "79", "80", "87", "88", "90", "95", "100", "200", "201"]
+            // ★ 終極進化：自動產生 "01" 到 "999" 的所有可能型號！您再也不用手動新增了！
+            potentialDesigns: Array.from({length: 999}, (_, i) => (i + 1).toString().padStart(2, '0'))
         };
 
         const App = () => {
@@ -90,10 +91,11 @@
             const isLocalEnv = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
             const imgFetchOptions = isLocalEnv ? {} : { crossOrigin: 'anonymous' };
 
-            // ★ 由長到短精準鎖定邏輯 (不受快取刪除影響)
+            // ★ 由長到短精準鎖定邏輯 (搭配 01~999 完美運作)
             const validDesigns = useMemo(() => {
                 const allDesigns = [...CONFIG.potentialDesigns].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
                 
+                // 如果是本機測試，就顯示全部讓您點擊測試
                 if (!isCloudFiltered || cloudFiles.doors.length === 0) return allDesigns; 
                 
                 const validSet = new Set();
@@ -108,7 +110,6 @@
                             const remainder = lowerFile.substring(dLower.length);
                             const nextChar = remainder.charAt(0);
                             
-                            // 嚴格判斷：後面緊接的字元必須是 1,2,3,5,6 (系列號) 或是 - (特殊款) 或是副檔名的 .
                             if (seriesKeys.includes(nextChar) || nextChar === '-' || nextChar === '.' || /^[a-c]$/i.test(nextChar)) {
                                 validSet.add(d);
                                 break; 
@@ -140,11 +141,10 @@
                 }
             };
 
-            // ★ 堅不可摧快取機制：API 失敗時保留舊快取，絕不掉空！
             const fetchRepoTree = async (forceRefresh = false) => {
                 setIsScanning(true);
-                const cacheKey = 'github_repo_tree_v12'; 
-                const cacheTimeKey = 'github_repo_tree_time_v12';
+                const cacheKey = 'github_repo_tree_v13'; 
+                const cacheTimeKey = 'github_repo_tree_time_v13';
                 
                 try {
                     if (isLocalEnv) {
@@ -156,7 +156,6 @@
                     const cached = localStorage.getItem(cacheKey);
                     const cachedTime = localStorage.getItem(cacheTimeKey);
                     
-                    // 如果不是強制刷新，且快取有效，直接使用
                     if (!forceRefresh && cached && cachedTime && (Date.now() - parseInt(cachedTime) < 86400000)) {
                         setCloudFiles(JSON.parse(cached));
                         setIsCloudFiltered(true);
@@ -184,7 +183,6 @@
                         const filesObj = { doors, lines };
                         setCloudFiles(filesObj);
                         setIsCloudFiltered(true);
-                        // 成功後才寫入新快取
                         localStorage.setItem(cacheKey, JSON.stringify(filesObj));
                         localStorage.setItem(cacheTimeKey, Date.now().toString());
                         if (forceRefresh) {
@@ -192,11 +190,10 @@
                             setTimeout(() => setToastMsg(''), 3000);
                         }
                     } else {
-                        // API 限制：如果有舊快取，拿出來擋著用！
                         if (cached) {
                             setCloudFiles(JSON.parse(cached));
                             setIsCloudFiltered(true);
-                            setToastMsg('API 連線受限，已恢復使用您的舊版暫存目錄');
+                            setToastMsg('API 連線受限，已恢復使用暫存目錄');
                             setTimeout(() => setToastMsg(''), 4000);
                         } else {
                             setIsCloudFiltered(false);
@@ -220,11 +217,11 @@
                 fetchRepoTree();
             }, [isAuthorized]);
 
-            // 強制刷新：告訴 fetchRepoTree 要去要新資料
             const handleRefreshCache = () => {
                 fetchRepoTree(true); 
             };
 
+            // ★ 本機備用防線：輕量化掃描，絕不卡死轉圈圈
             useEffect(() => {
                 if (!isAuthorized || isCloudFiltered || !selection.design) return;
                 
@@ -234,19 +231,20 @@
                     const check = async (folder, file) => {
                         try {
                             const res = await fetch(`${folder}/${file}`, { method: 'HEAD' });
-                            if (res.ok) found.add(file); 
+                            if (res.ok) found.add(file.toLowerCase()); 
                             else {
                                 const ext = file.split('.').pop();
                                 if (ext === 'jpg' || ext === 'png') {
                                     const upper = file.slice(0, -ext.length) + ext.toUpperCase();
                                     const r2 = await fetch(`${folder}/${upper}`, { method: 'HEAD' });
-                                    if (r2.ok) found.add(upper);
+                                    if (r2.ok) found.add(upper.toLowerCase());
                                 }
                             }
                         } catch(e) {}
                     };
 
                     const tasks = [];
+                    // 這裡只針對「點選中的型號」做掃描！不再是 999 個一起掃了！
                     Object.keys(CONFIG.series).forEach(tId => {
                         Object.keys(CONFIG.colors).forEach(cId => {
                             tasks.push(() => check('doors', `${selection.design}${tId}${cId}.jpg`));
@@ -388,7 +386,6 @@
                             const newScale = Math.min((cw * 0.95) / door.width, (ch * 0.95) / door.height);
                             setDoorScale(newScale);
                             door.set({ scaleX: newScale, scaleY: newScale, left: cw/2, top: ch/2 });
-                            // ★ 確保線條縮放比例跟門片完全吻合
                             const line = fabricCanvas.getObjects().find(o => o.id === 'lineLayer');
                             if (line && line.width) line.set({ scaleX: (door.width * newScale) / line.width, scaleY: (door.height * newScale) / line.height, left: cw / 2, top: ch / 2 });
                             fabricCanvas.getObjects().forEach(obj => {
@@ -447,11 +444,10 @@
                                 const lineHtmlImg = await loadImageSafe(`lines/${targetLineFile}`);
                                 const lineImg = new fabric.Image(lineHtmlImg);
                                 lineImg.set({ 
-                                    // ★ 確保初始繪製時，線條拉伸比例符合門片
                                     scaleX: (doorImg.width * newScale) / lineImg.width, 
                                     scaleY: (doorImg.height * newScale) / lineImg.height, 
                                     selectable: false, id: 'lineLayer', evented: false, 
-                                    originX: 'center', originY: 'center', left: cw / 2, top: ch / 2 
+                                    originX: 'center', originY: 'center', left: doorImg.left, top: doorImg.top 
                                 });
                                 fabricCanvas.add(lineImg);
                                 lineImg.moveTo(1); 
@@ -477,7 +473,7 @@
                 };
 
                 drawCanvas();
-            }, [selection, fabricCanvas, isCloudFiltered, cloudFiles, localValidFiles]);
+            }, [selection, fabricCanvas, isLocalEnv, isCloudFiltered, cloudFiles, localValidFiles]);
 
             const handleDownload = () => {
                 if (!fabricCanvas) return;
@@ -529,7 +525,7 @@
                             {(isScanning || isLocalScanning) && (
                                 <div className="absolute inset-0 bg-white/80 z-10 flex flex-col items-center justify-center">
                                     <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-2"></div>
-                                    <span className="text-xs font-bold text-blue-600">讀取目錄與過濾中...</span>
+                                    <span className="text-xs font-bold text-blue-600">正在處理圖庫目錄...</span>
                                 </div>
                             )}
                             
@@ -716,7 +712,7 @@
                         </div>
                     </div>
 
-                    {/* ★ 手機版下方導覽列與下載按鈕 */}
+                    {/* 手機版下方導覽列與下載按鈕 */}
                     <div className="md:hidden absolute bottom-0 left-0 w-full h-20 bg-white border-t flex items-center justify-around z-30 shadow-[0_-5px_20px_rgba(0,0,0,0.05)] pb-4 px-2">
                         <button onClick={()=>setActiveMenu(activeMenu==='designs'?null:'designs')} className={`nav-btn flex flex-col items-center justify-center flex-1 h-full gap-1 ${activeMenu==='designs'?'text-blue-600':'text-slate-400'}`}>
                             <div className="text-xl">🔲</div><span className="text-[10px] font-black uppercase tracking-widest">選造型</span>
