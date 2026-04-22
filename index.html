@@ -63,7 +63,6 @@
             glassFrames: [ { id: "GLS_G-01_467×725", name: "玻璃框 G-01" }, { id: "GLS_T_08_200×605", name: "玻璃框 T-08" }, { id: "GLS_T_09_370×605", name: "玻璃框 T-09" }, { id: "GLS_T_16_200×200", name: "玻璃框 T-16" }, { id: "GLS_T_17_250×950", name: "玻璃框 T-17" } ],
             louvers: [ { id: "LOU_A-03_378×230", name: "百頁 A-03" }, { id: "LOU_A-04_200×650", name: "百頁 A-04" }, { id: "LOU_A-05_400×650", name: "百頁 A-05" }, { id: "LOU_A-13_250×297", name: "百頁 A-13" } ],
             accColors: [ { id: "白", name: "白色", hex: "#FFFFFF" }, { id: "柚木", name: "柚木色", hex: "#966F33" }, { id: "胡桃", name: "胡桃色", hex: "#5D4037" } ],
-            // ★ 終極進化：自動產生 "01" 到 "999" 的所有可能型號！您再也不用手動新增了！
             potentialDesigns: Array.from({length: 999}, (_, i) => (i + 1).toString().padStart(2, '0'))
         };
 
@@ -86,16 +85,17 @@
             const [localValidFiles, setLocalValidFiles] = useState(new Set());
             const [isLocalScanning, setIsLocalScanning] = useState(false);
             
+            // ★ 配件區的子分類狀態 (預設顯示玻璃框)
+            const [accTab, setAccTab] = useState('glass');
+            
             const canvasContainerRef = useRef(null);
 
             const isLocalEnv = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
             const imgFetchOptions = isLocalEnv ? {} : { crossOrigin: 'anonymous' };
 
-            // ★ 由長到短精準鎖定邏輯 (搭配 01~999 完美運作)
             const validDesigns = useMemo(() => {
                 const allDesigns = [...CONFIG.potentialDesigns].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
                 
-                // 如果是本機測試，就顯示全部讓您點擊測試
                 if (!isCloudFiltered || cloudFiles.doors.length === 0) return allDesigns; 
                 
                 const validSet = new Set();
@@ -221,7 +221,6 @@
                 fetchRepoTree(true); 
             };
 
-            // ★ 本機備用防線：輕量化掃描，絕不卡死轉圈圈
             useEffect(() => {
                 if (!isAuthorized || isCloudFiltered || !selection.design) return;
                 
@@ -244,7 +243,6 @@
                     };
 
                     const tasks = [];
-                    // 這裡只針對「點選中的型號」做掃描！不再是 999 個一起掃了！
                     Object.keys(CONFIG.series).forEach(tId => {
                         Object.keys(CONFIG.colors).forEach(cId => {
                             tasks.push(() => check('doors', `${selection.design}${tId}${cId}.jpg`));
@@ -352,7 +350,6 @@
                 });
             };
 
-            // 畫布初始化
             useEffect(() => {
                 if (!isAuthorized || !canvasContainerRef.current) return;
                 if (!fabricCanvas) {
@@ -400,7 +397,6 @@
                 return () => { window.removeEventListener('resize', handleResize); clearTimeout(timer); };
             }, [isAuthorized, fabricCanvas, activeMenu]);
 
-            // 強韌繪圖引擎
             useEffect(() => {
                 if (!fabricCanvas || !selection.file) return;
                 
@@ -473,7 +469,7 @@
                 };
 
                 drawCanvas();
-            }, [selection, fabricCanvas, isLocalEnv, isCloudFiltered, cloudFiles, localValidFiles]);
+            }, [selection, fabricCanvas, isCloudFiltered, cloudFiles, localValidFiles]);
 
             const handleDownload = () => {
                 if (!fabricCanvas) return;
@@ -618,7 +614,19 @@
                                     {!selectedAcc ? (
                                         <>
                                             <div className="bg-emerald-50 text-emerald-600 text-[10px] font-bold p-3 rounded-lg border border-emerald-100 mb-2 text-center">點擊加入畫布，或點選畫布上配件編輯</div>
-                                            {CONFIG.glassFrames.concat(CONFIG.louvers).map(acc => (
+                                            
+                                            {/* ★ 新增：配件子分類切換按鈕 */}
+                                            <div className="flex gap-2 mb-2">
+                                                <button onClick={() => setAccTab('glass')} className={`flex-1 py-2 text-[10px] font-black rounded-lg border-2 transition-all ${accTab === 'glass' ? 'border-blue-500 bg-blue-50 text-blue-600 shadow-sm' : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'}`}>
+                                                    玻璃框
+                                                </button>
+                                                <button onClick={() => setAccTab('louver')} className={`flex-1 py-2 text-[10px] font-black rounded-lg border-2 transition-all ${accTab === 'louver' ? 'border-blue-500 bg-blue-50 text-blue-600 shadow-sm' : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'}`}>
+                                                    百頁
+                                                </button>
+                                            </div>
+
+                                            {/* ★ 修正：根據目前選中的子分類來顯示對應的清單 */}
+                                            {(accTab === 'glass' ? CONFIG.glassFrames : CONFIG.louvers).map(acc => (
                                                 <button key={acc.id} onClick={async ()=>{
                                                     try {
                                                         const accHtmlImg = await loadImageSafe(`accessories/${acc.id}_白.png`);
