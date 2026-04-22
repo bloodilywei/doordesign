@@ -879,8 +879,21 @@
                                         </>
                                     ) : (
                                         <div className="bg-white p-3 rounded-xl border-2 border-blue-200 shadow-sm animate-in fade-in slide-in-from-top-2">
-                                            <p className="text-[9px] text-blue-500 font-black mb-1 uppercase tracking-widest">正在編輯配件</p>
-                                            <p className="text-xs font-black text-slate-800 mb-4 truncate">{selectedAcc.baseId}</p>
+                                            <div className="flex items-start justify-between mb-4">
+                                                <div className="flex flex-col overflow-hidden pr-2">
+                                                    <p className="text-[9px] text-blue-500 font-black mb-1 uppercase tracking-widest">正在編輯配件</p>
+                                                    <p className="text-xs font-black text-slate-800 truncate">{selectedAcc.baseId}</p>
+                                                </div>
+                                                <button onClick={()=>{
+                                                    // 取消畫布上的選取狀態
+                                                    fabricCanvas.discardActiveObject();
+                                                    fabricCanvas.requestRenderAll();
+                                                    // 切換回配件清單視圖
+                                                    setSelectedAcc(null);
+                                                }} className="shrink-0 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg text-[10px] font-black transition-all border border-slate-200 flex items-center gap-1 active:scale-95 shadow-sm">
+                                                    ⬅ 返回
+                                                </button>
+                                            </div>
                                             
                                             <button onClick={()=>{
                                                 fabricCanvas.remove(selectedAcc); 
