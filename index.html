@@ -88,11 +88,9 @@
             const canvasContainerRef = useRef(null);
             const isLocalEnv = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
-            // ★ 完美過濾機制：精準判斷造型與從屬關係
             const validDesigns = useMemo(() => {
                 const allDesigns = [...CONFIG.potentialDesigns].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
                 
-                // 如果 API 被擋，且本機也沒有資源，退回盲選模式顯示全部，交給本機點擊後掃描
                 if (!isCloudFiltered || cloudFiles.doors.length === 0) return allDesigns; 
                 
                 const validSet = new Set();
@@ -118,7 +116,6 @@
                 return allDesigns.filter(d => validSet.has(d));
             }, [isCloudFiltered, cloudFiles]);
 
-            // ★ 修正 1：移除所有 LocalStorage 的密碼紀錄，保證每次重新整理都要輸入
             const handleCheckKey = async () => {
                 if (!authKey) return;
                 setAuthError('驗證中...');
@@ -131,7 +128,6 @@
                     
                     if (matched && new Date(matched.expiresAt) > new Date()) {
                         setIsAuthorized(true);
-                        // 不再寫入 LocalStorage
                     } else {
                         setAuthError("密碼錯誤或已過期");
                     }
@@ -140,7 +136,6 @@
                 }
             };
 
-            // 1. 同步 GitHub 目錄 
             const fetchRepoTree = async () => {
                 setIsScanning(true);
                 const cacheKey = 'github_repo_tree_v10'; 
@@ -199,7 +194,6 @@
                 fetchRepoTree();
             }, [isAuthorized]);
 
-            // 2. 本機備用防線掃描
             useEffect(() => {
                 if (!isAuthorized || isCloudFiltered || !selection.design) return;
                 
@@ -209,7 +203,7 @@
                     const check = async (folder, file) => {
                         try {
                             const res = await fetch(`${folder}/${file}`, { method: 'HEAD' });
-                            if (res.ok) found.add(file); // 記錄精準大小寫
+                            if (res.ok) found.add(file); 
                             else {
                                 const ext = file.split('.').pop();
                                 if (ext === 'jpg' || ext === 'png') {
@@ -249,7 +243,21 @@
                 scanLocalFallback();
             }, [selection.design, isCloudFiltered, isAuthorized]);
 
-            // ★ 修正 2：特殊組合款的過濾邏輯升級，防止 751 的圖檔出現在 75 裡面
+            // =========================================================================
+            // ★ 修復重點：無視大小寫比對，徹底解決 01_G.png 變 01_g.png 找不到的問題
+            // =========================================================================
+            const hasDoorFile = (filename) => {
+                const lower = filename.toLowerCase();
+                if (isCloudFiltered) return cloudFiles.doors.some(f => f.toLowerCase() === lower);
+                return Array.from(localValidFiles).some(f => f.toLowerCase() === lower);
+            };
+            
+            const hasLineFile = (filename) => {
+                const lower = filename.toLowerCase();
+                if (isCloudFiltered) return cloudFiles.lines.some(f => f.toLowerCase() === lower);
+                return Array.from(localValidFiles).some(f => f.toLowerCase() === lower);
+            };
+
             const specialOptions = useMemo(() => {
                 const valid = [];
                 const designLower = selection.design.toLowerCase();
@@ -273,7 +281,6 @@
                 });
             }, [isCloudFiltered, cloudFiles.doors, localValidFiles, selection.design]);
 
-            // ★ 修正 3：自動導航機制！切換造型時，自動找出該造型「第一張有圖的顏色」，防止殘留舊檔名導致白畫面崩潰
             const currentDesignFiles = useMemo(() => {
                 const valid = [];
                 const extendedSuffixes = ["", "-01", "-02", "-03", "-04", "-05", "A", "B", "C"];
@@ -302,7 +309,6 @@
                     const currentLower = selection.file.toLowerCase();
                     const isCurrentValid = currentDesignFiles.some(f => f.toLowerCase() === currentLower);
                     if (!isCurrentValid) {
-                        // 舊檔案不適用於新造型，立刻自動切換成合法的新檔案！
                         setSelection(prev => ({ ...prev, file: currentDesignFiles[0] }));
                     }
                 }
@@ -316,17 +322,16 @@
                 setTimeout(() => setToastMsg(''), 3000);
             };
 
-            // ★ 修正 4：拔除所有 crossOrigin 設定，同網域下絕對不被阻擋！
             const loadImageSafe = (url) => {
                 return new Promise((resolve, reject) => {
                     const img = new window.Image();
+                    if (!isLocalEnv) img.crossOrigin = 'anonymous'; 
                     img.onload = () => resolve(img);
                     img.onerror = () => reject(new Error(`無法載入圖片: ${url}`));
                     img.src = url;
                 });
             };
 
-            // 畫布初始化
             useEffect(() => {
                 if (!isAuthorized || !canvasContainerRef.current) return;
                 if (!fabricCanvas) {
@@ -374,7 +379,6 @@
                 return () => { window.removeEventListener('resize', handleResize); clearTimeout(timer); };
             }, [isAuthorized, fabricCanvas, activeMenu]);
 
-            // 強韌繪圖引擎
             useEffect(() => {
                 if (!fabricCanvas || !selection.file) return;
                 
@@ -528,9 +532,8 @@
                                                 <div className="w-full h-1.5 bg-slate-200 rounded-full"></div><span className="text-[9px] font-bold text-slate-600">原樣</span>
                                             </button>
                                             {Object.entries(CONFIG.lineColors).map(([lc, d]) => {
-                                                const targetBase = `${selection.design}_${lc}.png`.toLowerCase();
-                                                const hasLine = isCloudFiltered ? cloudFiles.lines.some(f => f.toLowerCase() === targetBase) : localValidFiles.has(targetBase);
-                                                if (!hasLine) return null;
+                                                // ★ 修正區域：使用精準的大小寫判斷函式
+                                                if (!hasLineFile(`${selection.design}_${lc}.png`)) return null;
                                                 return (
                                                     <button key={lc} onClick={()=>setSelection({...selection, lineColor:lc})} className={`p-2 border-2 rounded-lg flex flex-col items-center gap-1 ${selection.lineColor===lc?'border-blue-500 bg-blue-50':'border-slate-100'}`}>
                                                         <div className="w-full h-1.5 rounded-full border border-slate-200" style={{backgroundColor: d.hex}}></div><span className="text-[9px] font-bold text-slate-600">{d.name}</span>
@@ -541,11 +544,10 @@
                                     </div>
                                     
                                     {Object.entries(CONFIG.series).map(([tId, tName]) => {
+                                        // ★ 修正區域：使用精準的大小寫判斷函式
                                         const seriesColors = Object.entries(CONFIG.colors).filter(([cId]) => {
-                                            const base = `${selection.design}${tId}${cId}`.toLowerCase();
-                                            return isCloudFiltered 
-                                                ? cloudFiles.doors.some(f => f.toLowerCase() === `${base}.jpg` || f.toLowerCase() === `${base}.png`)
-                                                : localValidFiles.has(`${base}.jpg`) || localValidFiles.has(`${base}.png`);
+                                            const base = `${selection.design}${tId}${cId}`;
+                                            return hasDoorFile(`${base}.jpg`) || hasDoorFile(`${base}.png`);
                                         });
                                         if (seriesColors.length === 0) return null;
 
