@@ -60,41 +60,64 @@
                 "8": { name: "摩卡", hex: "#4B3621" }, "9": { name: "灰橡", hex: "#8E8E8E" }
             },
             lineColors: { "G": { name: "灰線", hex: "#9ca3af" }, "B": { name: "黑線", hex: "#000000" }, "W": { name: "白線", hex: "#ffffff" } },
+            // 本機預設配件清單 (雲端有資料時會被自動解析引擎覆蓋)
             glassFrames: [ { id: "GLS_G-01_467×725", name: "玻璃框 G-01" }, { id: "GLS_T_08_200×605", name: "玻璃框 T-08" }, { id: "GLS_T_09_370×605", name: "玻璃框 T-09" }, { id: "GLS_T_16_200×200", name: "玻璃框 T-16" }, { id: "GLS_T_17_250×950", name: "玻璃框 T-17" } ],
-            louvers: [ { id: "LOU_A-03_378×230", name: "百頁 A-03" }, { id: "LOU_A-04_200×650", name: "百頁 A-04" }, { id: "LOU_A-05_400×650", name: "百頁 A-05" }, { id: "LOU_A-13_250×297", name: "百頁 A-13" } ],
+            louvers: [ { id: "LOU_A-03_420×378", name: "百頁 A-03" }, { id: "LOU_A-04_200×650", name: "百頁 A-04" }, { id: "LOU_A-05_400×650", name: "百頁 A-05" }, { id: "LOU_A-13_250×297", name: "百頁 A-13" } ],
             accColors: [ { id: "白", name: "白色", hex: "#FFFFFF" }, { id: "柚木", name: "柚木色", hex: "#966F33" }, { id: "胡桃", name: "胡桃色", hex: "#5D4037" } ],
             potentialDesigns: Array.from({length: 999}, (_, i) => (i + 1).toString().padStart(2, '0'))
         };
 
-        const DesignCard = ({ id, cloudFiles, isCloudFiltered, onSelect, imgVersion }) => {
+        const DesignCard = ({ id, cloudFiles, isCloudFiltered, onSelect, localDoorFiles }) => {
             const [isFailed, setIsFailed] = useState(false);
             const [isLoaded, setIsLoaded] = useState(false);
+            const [thumbIndex, setThumbIndex] = useState(0);
 
-            const thumbSrc = useMemo(() => {
-                if (isCloudFiltered) {
+            const thumbCandidates = useMemo(() => {
+                const preferredNames = [
+                    `${id}-11.jpg`,
+                    `${id}11.jpg`,
+                    `${id}-12.jpg`,
+                    `${id}12.jpg`
+                ];
+                const sourceFiles = isCloudFiltered ? cloudFiles.doors : (localDoorFiles || []);
+
+                if (sourceFiles.length > 0) {
                     const dLower = id.toLowerCase();
-                    const match = cloudFiles.doors.find(f => {
+                    const matchingFiles = sourceFiles.filter(f => {
                         const lower = f.toLowerCase();
                         return lower.startsWith(dLower + '-') || lower.startsWith(dLower + '_') ||
                                (lower.startsWith(dLower) && Object.keys(CONFIG.series).includes(lower.substring(dLower.length).charAt(0)));
                     });
-                    return match ? `doors/${match}` : null;
-                } else {
-                    return `doors/${id}-11.jpg`; 
-                }
-            }, [id, cloudFiles, isCloudFiltered]);
 
-            if (isCloudFiltered && !thumbSrc) return null;
+                    const orderedMatches = preferredNames
+                        .filter(name => matchingFiles.some(file => file.toLowerCase() === name.toLowerCase()))
+                        .concat(
+                            matchingFiles.filter(file =>
+                                !preferredNames.some(name => name.toLowerCase() === file.toLowerCase())
+                            )
+                        );
+
+                    return orderedMatches.map(file => `doors/${file}`);
+                }
+
+                return preferredNames.map(name => `doors/${name}`);
+            }, [id, cloudFiles.doors, isCloudFiltered, localDoorFiles]);
+
+            const thumbSrc = thumbCandidates[thumbIndex] || null;
+
+            useEffect(() => {
+                setThumbIndex(0);
+                setIsFailed(false);
+                setIsLoaded(false);
+            }, [thumbCandidates]);
+
+            if (!thumbSrc) return null;
             if (isFailed) return null;
 
-            const handleImageError = (e) => {
-                if (!isCloudFiltered) {
-                    const currentSrc = e.target.getAttribute('src');
-                    const baseSrc = currentSrc ? currentSrc.split('?')[0] : '';
-                    if (baseSrc === `doors/${id}-11.jpg`) e.target.src = `doors/${id}11.jpg?v=${imgVersion}`;
-                    else if (baseSrc === `doors/${id}11.jpg`) e.target.src = `doors/${id}-12.jpg?v=${imgVersion}`;
-                    else if (baseSrc === `doors/${id}-12.jpg`) e.target.src = `doors/${id}12.jpg?v=${imgVersion}`;
-                    else setIsFailed(true); 
+            const handleImageError = () => {
+                setIsLoaded(false);
+                if (thumbIndex < thumbCandidates.length - 1) {
+                    setThumbIndex(prev => prev + 1);
                 } else {
                     setIsFailed(true);
                 }
@@ -112,9 +135,8 @@
                                 <span className="text-[9px] text-slate-400 font-bold tracking-widest">載入中</span>
                             </div>
                         )}
-                        {/* ★ 加入 imgVersion 強制破除快取 */}
                         <img
-                            src={thumbSrc ? `${thumbSrc}?v=${imgVersion}` : undefined}
+                            src={thumbSrc}
                             alt={`造型 ${id}`}
                             loading="lazy"
                             onLoad={() => setIsLoaded(true)}
@@ -142,14 +164,12 @@
             const [selectedAcc, setSelectedAcc] = useState(null);
             const [doorScale, setDoorScale] = useState(1);
             
+            // ★ 新增 accs 陣列來存放雲端配件
             const [cloudFiles, setCloudFiles] = useState({ doors: [], lines: [], accs: [] });
             const [isCloudFiltered, setIsCloudFiltered] = useState(false); 
             const [isScanning, setIsScanning] = useState(false);
             const [toastMsg, setToastMsg] = useState('');
             const [canvasError, setCanvasError] = useState(null);
-
-            // ★ 新增：全域圖片快取版本號
-            const [imgVersion, setImgVersion] = useState(Date.now());
 
             const [localValidFiles, setLocalValidFiles] = useState({ doors: new Set(), lines: new Set() });
             const [isLocalScanning, setIsLocalScanning] = useState(false);
@@ -228,7 +248,11 @@
                 });
             }, [filesForCurrentDesign, selection.design]);
 
+            // =========================================================
+            // ★ 核心升級：自動動態解析配件清單
+            // =========================================================
             const dynamicAccessories = useMemo(() => {
+                // 如果沒有雲端資料，本機預設使用 CONFIG 定義
                 if (!isCloudFiltered || !cloudFiles.accs || cloudFiles.accs.length === 0) {
                     return { glass: CONFIG.glassFrames, louver: CONFIG.louvers };
                 }
@@ -236,19 +260,21 @@
                 const glass = [];
                 const louver = [];
                 const addedIds = new Set();
+                const validColors = CONFIG.accColors.map(c => c.id);
 
                 cloudFiles.accs.forEach(file => {
+                    // 解析檔名，例如: GLS_G-01_467x725_白.png 擷取前半段 ID 與 顏色
                     const match = file.match(/^(.+?)_([^_.]+)\.(png|jpg)$/i);
                     if (match) {
                         const baseId = match[1];
                         const colorId = match[2];
                         
-                        const colorMatch = CONFIG.accColors.find(c => c.id === colorId || c.name === colorId);
-                        
-                        if (colorMatch && !addedIds.has(baseId)) {
+                        // 確認結尾的顏色是系統支援的 (防呆)
+                        if (validColors.includes(colorId) && !addedIds.has(baseId)) {
                             addedIds.add(baseId);
                             
                             let name = baseId;
+                            // 自動化命名與分類：根據前綴判斷
                             if (baseId.toUpperCase().startsWith('GLS_')) {
                                 name = baseId.substring(4).replace(/_/g, ' '); 
                                 glass.push({ id: baseId, name: `玻璃框 ${name}` });
@@ -256,16 +282,19 @@
                                 name = baseId.substring(4).replace(/_/g, ' ');
                                 louver.push({ id: baseId, name: `百頁 ${name}` });
                             } else {
+                                // 沒照規則命名的，預設丟到玻璃框，名字直接用原檔名
                                 glass.push({ id: baseId, name: baseId });
                             }
                         }
                     }
                 });
 
+                // 防呆：如果雲端資料夾解析失敗，退回預設清單
                 if (glass.length === 0 && louver.length === 0) {
                     return { glass: CONFIG.glassFrames, louver: CONFIG.louvers };
                 }
 
+                // 照字母排序，讓選單整齊劃一
                 glass.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
                 louver.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
 
@@ -290,10 +319,16 @@
 
             const fetchRepoTree = async (forceRefresh = false) => {
                 setIsScanning(true);
-                const cacheKey = 'github_repo_tree_v26'; 
-                const cacheTimeKey = 'github_repo_tree_time_v26';
+                const cacheKey = 'github_repo_tree_v24'; 
+                const cacheTimeKey = 'github_repo_tree_time_v24';
                 
                 try {
+                    if (isLocalEnv) {
+                        setIsCloudFiltered(false);
+                        setIsScanning(false);
+                        return;
+                    }
+
                     const cached = localStorage.getItem(cacheKey);
                     const cachedTime = localStorage.getItem(cacheTimeKey);
                     if (!forceRefresh && cached && cachedTime && (Date.now() - parseInt(cachedTime) < 86400000)) {
@@ -311,34 +346,37 @@
                         repo = pathParts.length > 0 ? pathParts[0] : window.location.hostname;
                     }
 
-                    const fetchUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/main?recursive=1${forceRefresh ? `&t=${Date.now()}` : ''}`;
-                    const res = await fetch(fetchUrl);
-                    
+                    const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/main?recursive=1`);
                     if (res.ok) {
                         const data = await res.json();
                         const doors = [];
                         const lines = [];
-                        const accs = []; 
+                        const accs = []; // ★ 新增配件收集陣列
 
                         data.tree.forEach(item => {
                             const lowerPath = item.path.toLowerCase();
                             const fileName = item.path.split('/')[1];
                             
                             if (lowerPath.startsWith('doors/')) {
-                                if (!/^[0-9a-z]+[-_][gbw]\.(png|jpg)$/i.test(fileName)) doors.push(fileName);
+                                if (!/^[0-9a-z]+[-_][gbw]\.(png|jpg)$/i.test(fileName)) {
+                                    doors.push(fileName);
+                                }
                             }
-                            if (lowerPath.startsWith('lines/')) lines.push(fileName);
-                            if (lowerPath.startsWith('accessories/')) accs.push(fileName);
+                            if (lowerPath.startsWith('lines/')) {
+                                lines.push(fileName);
+                            }
+                            // ★ 把雲端的配件全部抓進來
+                            if (lowerPath.startsWith('accessories/')) {
+                                accs.push(fileName);
+                            }
                         });
-                        
                         const filesObj = { doors, lines, accs };
                         setCloudFiles(filesObj);
                         setIsCloudFiltered(true);
                         localStorage.setItem(cacheKey, JSON.stringify(filesObj));
                         localStorage.setItem(cacheTimeKey, Date.now().toString());
-                        
                         if (forceRefresh) {
-                            setToastMsg('圖庫目錄與圖片已成功更新！');
+                            setToastMsg('圖庫目錄已成功更新！');
                             setTimeout(() => setToastMsg(''), 3000);
                         }
                     } else {
@@ -365,9 +403,7 @@
                 fetchRepoTree();
             }, [isAuthorized]);
 
-            // ★ 點擊刷新按鈕時，同步更新圖片快取版本號 (強制重新下載圖片)
             const handleRefreshCache = () => {
-                setImgVersion(Date.now());
                 fetchRepoTree(true); 
             };
 
@@ -461,8 +497,7 @@
                 }
             }, [filesForCurrentDesign, selection.file, appView]);
 
-            // ★ 更新後的圖片載入器：強制附加 imgVersion，徹底破除快取
-            const loadImageSafe = useCallback((url) => {
+            const loadImageSafe = (url) => {
                 return new Promise((resolve, reject) => {
                     const img = new window.Image();
                     const onLoad = () => resolve(img);
@@ -471,7 +506,7 @@
                             const imgRetry = new window.Image();
                             imgRetry.onload = () => resolve(imgRetry);
                             imgRetry.onerror = () => reject(new Error(`無法載入圖片: ${url}`));
-                            imgRetry.src = url.includes('?') ? url : `${url}?v=${imgVersion}&retry=1`;
+                            imgRetry.src = url;
                         } else {
                             reject(new Error(`無法載入圖片: ${url}`));
                         }
@@ -479,11 +514,11 @@
                     if (!isLocalEnv) img.crossOrigin = 'anonymous'; 
                     img.onload = onLoad;
                     img.onerror = onError;
-                    // 自動加上快取版本號
-                    img.src = url.includes('?') ? url : `${url}?v=${imgVersion}`;
+                    img.src = url;
                 });
-            }, [isLocalEnv, imgVersion]);
+            };
 
+            // 畫布初始化
             useEffect(() => {
                 if (!isAuthorized || appView !== 'editor' || !canvasContainerRef.current) return;
                 
@@ -535,7 +570,7 @@
                 };
             }, [isAuthorized, appView]);
 
-            // ★ 將 loadImageSafe 和 imgVersion 加入依賴，確保刷新時重繪
+            // 繪圖引擎
             useEffect(() => {
                 if (appView !== 'editor' || !fabricCanvas || !selection.file) return;
                 
@@ -603,16 +638,6 @@
                                 lineImg.moveTo(1); 
                             } catch (err) {}
                         }
-                        
-                        // 當刷新目錄時，若有配件也要重新渲染以確保是最新的
-                        const existingAccs = fabricCanvas.getObjects().filter(o => o.id?.startsWith('acc'));
-                        if (existingAccs.length > 0) {
-                            existingAccs.forEach(acc => {
-                                acc.set({ scaleX: newScale, scaleY: newScale });
-                                acc.setCoords();
-                            });
-                        }
-
                         fabricCanvas.requestRenderAll();
 
                     } catch (error) {
@@ -625,7 +650,7 @@
                 drawCanvas();
                 
                 return () => { isCancelled = true; };
-            }, [selection, fabricCanvas, isCloudFiltered, cloudFiles, localValidFiles, appView, imgVersion, loadImageSafe]);
+            }, [selection, fabricCanvas, isCloudFiltered, cloudFiles, localValidFiles, appView]);
 
             const handleDownload = () => {
                 if (!fabricCanvas) return;
@@ -665,6 +690,9 @@
                 );
             }
 
+            // =========================================================================
+            // 視圖 1：全螢幕型錄總覽 (Gallery View)
+            // =========================================================================
             if (appView === 'gallery') {
                 return (
                     <div className="min-h-[100dvh] bg-slate-50 flex flex-col font-sans">
@@ -701,8 +729,8 @@
                                         id={id} 
                                         cloudFiles={cloudFiles} 
                                         isCloudFiltered={isCloudFiltered} 
+                                        localDoorFiles={Array.from(localValidFiles.doors)}
                                         onSelect={openEditor} 
-                                        imgVersion={imgVersion}
                                     />
                                 ))}
                             </div>
@@ -711,6 +739,9 @@
                 );
             }
 
+            // =========================================================================
+            // 視圖 2：編輯器工作室 (Editor View)
+            // =========================================================================
             return (
                 <div className="flex flex-col md:flex-row h-[100dvh] w-screen bg-slate-50 font-sans overflow-hidden relative animate-in fade-in duration-300">
                     
@@ -833,25 +864,21 @@
                                                 </button>
                                             </div>
 
+                                            {/* ★ 全新動態化配件選單：不用修改代碼，自動抓取 GitHub 的圖檔 */}
                                             <div className="grid grid-cols-2 gap-2">
                                                 {(accTab === 'glass' ? dynamicAccessories.glass : dynamicAccessories.louver).map(acc => (
                                                     <button key={acc.id} onClick={async ()=>{
                                                         try {
                                                             const accHtmlImg = await loadImageSafe(`accessories/${acc.id}_白.png`);
                                                             const img = new fabric.Image(accHtmlImg);
-                                                            
                                                             img.set({ 
                                                                 left: fabricCanvas.getWidth()/2, top: fabricCanvas.getHeight()/2, 
                                                                 originX: 'center', originY: 'center', 
                                                                 id: `acc-${Date.now()}`, baseId: acc.id, currentColor: "白", 
                                                                 scaleX: doorScale, scaleY: doorScale, 
-                                                                // ★ 開啟控制權，但鎖定縮放行為
-                                                                hasControls: true, lockScalingX: true, lockScalingY: true, 
-                                                                hasBorders: true, borderColor: '#3b82f6', cornerColor: '#3b82f6', transparentCorners: false, cornerSize: 10, cornerStyle: 'circle'
+                                                                hasControls: false, lockScalingX: true, lockScalingY: true, 
+                                                                hasBorders: true, cornerColor: '#3b82f6', transparentCorners: false
                                                             });
-                                                            // ★ 隱藏所有縮放控制點，只保留旋轉拉桿 (mtr)
-                                                            img.setControlsVisibility({ mt: false, mb: false, ml: false, mr: false, bl: false, br: false, tl: false, tr: false, mtr: true });
-                                                            
                                                             fabricCanvas.add(img).setActiveObject(img).requestRenderAll();
                                                             setActiveMenu('acc'); 
                                                         } catch (err) {
@@ -860,13 +887,13 @@
                                                         }
                                                     }} className="p-2 border-2 border-slate-100 bg-white rounded-xl flex flex-col items-center gap-2 active:scale-95 transition-all hover:border-blue-300 shadow-sm group">
                                                         <div className="w-full h-20 bg-slate-50 rounded-lg p-2 flex items-center justify-center border border-slate-100 overflow-hidden relative">
-                                                            {/* ★ 這裡也加入 imgVersion */}
-                                                            <img src={`accessories/${acc.id}_白.png?v=${imgVersion}`} alt={acc.name} loading="lazy" className="max-w-full max-h-full object-contain drop-shadow-sm group-hover:scale-105 transition-transform" onError={(e) => { e.target.style.display='none'; e.target.nextSibling.style.display='block'; }} />
+                                                            <img src={`accessories/${acc.id}_白.png`} alt={acc.name} loading="lazy" className="max-w-full max-h-full object-contain drop-shadow-sm group-hover:scale-105 transition-transform" onError={(e) => { e.target.style.display='none'; e.target.nextSibling.style.display='block'; }} />
                                                             <span className="hidden text-slate-300 text-[10px] font-bold">無預覽</span>
                                                         </div>
                                                         <span className="text-[10px] font-black text-slate-700 text-center leading-tight truncate w-full">{acc.name}</span>
                                                     </button>
                                                 ))}
+                                                {/* 防呆提示：如果選單是空的 */}
                                                 {(accTab === 'glass' ? dynamicAccessories.glass : dynamicAccessories.louver).length === 0 && (
                                                     <div className="col-span-2 text-center py-4 text-[10px] text-slate-400 font-bold border border-dashed border-slate-200 rounded-lg">
                                                         該分類下尚未上傳配件圖檔
@@ -882,8 +909,10 @@
                                                     <p className="text-xs font-black text-slate-800 truncate">{selectedAcc.baseId}</p>
                                                 </div>
                                                 <button onClick={()=>{
+                                                    // 取消畫布上的選取狀態
                                                     fabricCanvas.discardActiveObject();
                                                     fabricCanvas.requestRenderAll();
+                                                    // 切換回配件清單視圖
                                                     setSelectedAcc(null);
                                                 }} className="shrink-0 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg text-[10px] font-black transition-all border border-slate-200 flex items-center gap-1 active:scale-95 shadow-sm">
                                                     ⬅ 返回
@@ -907,16 +936,11 @@
                                                             const newImg = new fabric.Image(newHtmlImg);
                                                             newImg.set({ 
                                                                 left: selectedAcc.left, top: selectedAcc.top, 
-                                                                originX: 'center', originY: 'center', // 確保換色時旋轉中心點不偏移
-                                                                scaleX: doorScale, scaleY: doorScale, angle: selectedAcc.angle,
+                                                                scaleX: selectedAcc.scaleX, scaleY: selectedAcc.scaleY, 
                                                                 id: selectedAcc.id, baseId: selectedAcc.baseId, currentColor: c.id, 
-                                                                // ★ 開啟控制權，但鎖定縮放行為
-                                                                hasControls: true, lockScalingX: true, lockScalingY: true, 
-                                                                hasBorders: true, borderColor: '#3b82f6', cornerColor: '#3b82f6', transparentCorners: false, cornerSize: 10, cornerStyle: 'circle'
+                                                                hasControls: false, lockScalingX: true, lockScalingY: true, 
+                                                                hasBorders: true, cornerColor: '#3b82f6', transparentCorners: false
                                                             });
-                                                            // ★ 換色後依然隱藏縮放點，只保留旋轉拉桿
-                                                            newImg.setControlsVisibility({ mt: false, mb: false, ml: false, mr: false, bl: false, br: false, tl: false, tr: false, mtr: true });
-                                                            
                                                             fabricCanvas.remove(selectedAcc).add(newImg).setActiveObject(newImg).requestRenderAll();
                                                             setSelectedAcc(newImg);
                                                         } catch(err) {
@@ -954,9 +978,6 @@
                             </div>
                             
                             <div className="flex gap-2">
-                                <button onClick={handleRefreshCache} className="bg-slate-100 text-slate-600 px-3 py-2.5 rounded-xl text-[12px] font-black shadow-sm hover:bg-slate-200 active:scale-95 transition-all flex items-center gap-1">
-                                    🔄 <span className="hidden sm:inline">刷新目錄</span>
-                                </button>
                                 <button onClick={handleDownload} className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-5 py-2.5 rounded-xl text-[12px] font-black tracking-widest shadow-[0_4px_15px_rgba(59,130,246,0.4)] hover:shadow-[0_6px_20px_rgba(59,130,246,0.6)] hover:-translate-y-0.5 active:scale-95 transition-all uppercase hidden md:flex items-center gap-2 border border-blue-400">
                                     📥 儲存圖檔
                                 </button>
