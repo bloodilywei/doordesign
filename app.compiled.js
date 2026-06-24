@@ -194,12 +194,12 @@ var DesignCard = function DesignCard(_ref) {
           return name.toLowerCase() === file.toLowerCase();
         });
       }));
-      return orderedMatches.map(function (file) {
-        return "doors/".concat(file);
+      return orderedMatches.flatMap(function (file) {
+        return ["thumbs/".concat(file), "doors/".concat(file)];
       });
     }
-    return preferredNames.map(function (name) {
-      return "doors/".concat(name);
+    return preferredNames.flatMap(function (name) {
+      return ["thumbs/".concat(name), "doors/".concat(name)];
     });
   }, [id, cloudFiles.doors, isCloudFiltered, localDoorFiles]);
   var thumbSrc = thumbCandidates[thumbIndex] || null;
@@ -327,10 +327,14 @@ var App = function App() {
     _useState36 = _slicedToArray(_useState35, 2),
     isLocalScanning = _useState36[0],
     setIsLocalScanning = _useState36[1];
-  var _useState37 = useState('glass'),
+  var _useState37 = useState([]),
     _useState38 = _slicedToArray(_useState37, 2),
-    accTab = _useState38[0],
-    setAccTab = _useState38[1];
+    localAccessoryFiles = _useState38[0],
+    setLocalAccessoryFiles = _useState38[1];
+  var _useState39 = useState('glass'),
+    _useState40 = _slicedToArray(_useState39, 2),
+    accTab = _useState40[0],
+    setAccTab = _useState40[1];
   var canvasContainerRef = useRef(null);
   var validDesigns = useMemo(function () {
     var allDesigns = _toConsumableArray(CONFIG.potentialDesigns).sort(function (a, b) {
@@ -422,8 +426,9 @@ var App = function App() {
   // ★ 核心升級：自動動態解析配件清單
   // =========================================================
   var dynamicAccessories = useMemo(function () {
-    // 如果沒有雲端資料，本機預設使用 CONFIG 定義
-    if (!isCloudFiltered || !cloudFiles.accs || cloudFiles.accs.length === 0) {
+    var sourceAccessoryFiles = isCloudFiltered ? cloudFiles.accs : localAccessoryFiles;
+    // 如果沒有可解析的配件資料，退回預設清單
+    if (!sourceAccessoryFiles || sourceAccessoryFiles.length === 0) {
       return {
         glass: CONFIG.glassFrames,
         louver: CONFIG.louvers
@@ -435,7 +440,7 @@ var App = function App() {
     var validColors = CONFIG.accColors.map(function (c) {
       return c.id;
     });
-    cloudFiles.accs.forEach(function (file) {
+    sourceAccessoryFiles.forEach(function (file) {
       // 解析檔名，例如: GLS_G-01_467x725_白.png 擷取前半段 ID 與 顏色
       var match = file.match(/^(.+?)_([^_.]+)\.(png|jpg)$/i);
       if (match) {
@@ -489,7 +494,7 @@ var App = function App() {
       glass: glass,
       louver: louver
     };
-  }, [isCloudFiltered, cloudFiles.accs]);
+  }, [isCloudFiltered, cloudFiles.accs, localAccessoryFiles]);
   var handleCheckKey = /*#__PURE__*/function () {
     var _handleCheckKey = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee() {
       var app, db, snapshot, matched, _t;
@@ -676,6 +681,66 @@ var App = function App() {
     if (!isAuthorized) return;
     fetchRepoTree();
   }, [isAuthorized]);
+  useEffect(function () {
+    if (!isAuthorized || isCloudFiltered) return;
+    var cancelled = false;
+    var loadLocalAccessories = /*#__PURE__*/function () {
+      var _loadLocalAccessories = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee3() {
+        var res, html, matches, files;
+        return _regenerator().w(function (_context3) {
+          while (1) switch (_context3.p = _context3.n) {
+            case 0:
+              _context3.p = 0;
+              _context3.n = 1;
+              return fetch("accessories/?t=".concat(Date.now()));
+            case 1:
+              res = _context3.v;
+              if (!res.ok) {
+                _context3.n = 4;
+                break;
+              }
+              _context3.n = 2;
+              return res.text();
+            case 2:
+              html = _context3.v;
+              matches = Array.from(html.matchAll(/href=\"([^\"]+)\"/gi));
+              files = matches.map(function (match) {
+                return match[1];
+              }).filter(function (href) {
+                return href && !href.startsWith('?') && href !== '../';
+              }).map(function (href) {
+                return decodeURIComponent(href.split('?')[0]).replace(/\/$/, '');
+              }).filter(function (name) {
+                return /\.(png|jpg)$/i.test(name);
+              });
+              if (!cancelled) {
+                setLocalAccessoryFiles(Array.from(new Set(files)).sort(function (a, b) {
+                  return a.localeCompare(b, 'zh-Hant');
+                }));
+              }
+              _context3.n = 5;
+              break;
+            case 3:
+              _context3.p = 3;
+              _context3.v;
+              if (!cancelled) setLocalAccessoryFiles([]);
+            case 4:
+              return _context3.a(2);
+            case 5:
+              return _context3.a(2);
+          }
+        }, _callee3, null, [[0, 3]]);
+      }));
+      function loadLocalAccessories() {
+        return _loadLocalAccessories.apply(this, arguments);
+      }
+      return loadLocalAccessories;
+    }();
+    loadLocalAccessories();
+    return function () {
+      cancelled = true;
+    };
+  }, [isAuthorized, isCloudFiltered]);
   var handleRefreshCache = function handleRefreshCache() {
     fetchRepoTree(true);
   };
