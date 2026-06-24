@@ -163,7 +163,8 @@ var DesignCard = function DesignCard(_ref) {
     cloudFiles = _ref.cloudFiles,
     isCloudFiltered = _ref.isCloudFiltered,
     onSelect = _ref.onSelect,
-    localDoorFiles = _ref.localDoorFiles;
+    localDoorFiles = _ref.localDoorFiles,
+    localThumbMap = _ref.localThumbMap;
   var _useState = useState(false),
     _useState2 = _slicedToArray(_useState, 2),
     isFailed = _useState2[0],
@@ -178,6 +179,11 @@ var DesignCard = function DesignCard(_ref) {
     setThumbIndex = _useState6[1];
   var thumbCandidates = useMemo(function () {
     var preferredNames = ["".concat(id, "-11.jpg"), "".concat(id, "11.jpg"), "".concat(id, "-12.jpg"), "".concat(id, "12.jpg")];
+    if (!isCloudFiltered && localThumbMap && localThumbMap[id] && localThumbMap[id].length > 0) {
+      return localThumbMap[id].flatMap(function (file) {
+        return ["thumbs/".concat(file), "doors/".concat(file)];
+      });
+    }
     var sourceFiles = isCloudFiltered ? cloudFiles.doors : localDoorFiles || [];
     if (sourceFiles.length > 0) {
       var dLower = id.toLowerCase();
@@ -201,7 +207,7 @@ var DesignCard = function DesignCard(_ref) {
     return preferredNames.flatMap(function (name) {
       return ["thumbs/".concat(name), "doors/".concat(name)];
     });
-  }, [id, cloudFiles.doors, isCloudFiltered, localDoorFiles]);
+  }, [id, cloudFiles.doors, isCloudFiltered, localDoorFiles, localThumbMap]);
   var thumbSrc = thumbCandidates[thumbIndex] || null;
   useEffect(function () {
     setThumbIndex(0);
@@ -331,10 +337,22 @@ var App = function App() {
     _useState38 = _slicedToArray(_useState37, 2),
     localAccessoryFiles = _useState38[0],
     setLocalAccessoryFiles = _useState38[1];
-  var _useState39 = useState('glass'),
+  var _useState39 = useState([]),
     _useState40 = _slicedToArray(_useState39, 2),
-    accTab = _useState40[0],
-    setAccTab = _useState40[1];
+    localThumbFiles = _useState40[0],
+    setLocalThumbFiles = _useState40[1];
+  var _useState41 = useState({}),
+    _useState42 = _slicedToArray(_useState41, 2),
+    localThumbMap = _useState42[0],
+    setLocalThumbMap = _useState42[1];
+  var _useState43 = useState('glass'),
+    _useState44 = _slicedToArray(_useState43, 2),
+    accTab = _useState44[0],
+    setAccTab = _useState44[1];
+  var _useState45 = useState(24),
+    _useState46 = _slicedToArray(_useState45, 2),
+    visibleDesignCount = _useState46[0],
+    setVisibleDesignCount = _useState46[1];
   var canvasContainerRef = useRef(null);
   var validDesigns = useMemo(function () {
     var allDesigns = _toConsumableArray(CONFIG.potentialDesigns).sort(function (a, b) {
@@ -342,13 +360,14 @@ var App = function App() {
         numeric: true
       });
     });
-    if (!isCloudFiltered || cloudFiles.doors.length === 0) return allDesigns;
+    var sourceFiles = isCloudFiltered ? cloudFiles.doors : localThumbFiles;
+    if (!sourceFiles || sourceFiles.length === 0) return allDesigns;
     var validSet = new Set();
     var seriesKeys = Object.keys(CONFIG.series);
     var allDesignsByLength = _toConsumableArray(allDesigns).sort(function (a, b) {
       return b.length - a.length;
     });
-    cloudFiles.doors.forEach(function (file) {
+    sourceFiles.forEach(function (file) {
       var lowerFile = file.toLowerCase();
       var match = lowerFile.match(/^([a-z0-9]+)[-_]/);
       if (match) {
@@ -385,7 +404,7 @@ var App = function App() {
     return allDesigns.filter(function (d) {
       return validSet.has(d);
     });
-  }, [isCloudFiltered, cloudFiles]);
+  }, [isCloudFiltered, cloudFiles, localThumbFiles]);
   var filesForCurrentDesign = useMemo(function () {
     if (!selection.design) return [];
     var sourceFiles = isCloudFiltered ? cloudFiles.doors : Array.from(localValidFiles.doors);
@@ -741,9 +760,92 @@ var App = function App() {
       cancelled = true;
     };
   }, [isAuthorized, isCloudFiltered]);
+  useEffect(function () {
+    if (!isAuthorized || isCloudFiltered) return;
+    var cancelled = false;
+    var loadLocalThumbs = /*#__PURE__*/function () {
+      var _loadLocalThumbs = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee4() {
+        var res, data, designs, files, map;
+        return _regenerator().w(function (_context4) {
+          while (1) switch (_context4.p = _context4.n) {
+            case 0:
+              _context4.p = 0;
+              _context4.n = 1;
+              return fetch("doors.index.json?t=".concat(Date.now()));
+            case 1:
+              res = _context4.v;
+              if (!res.ok) {
+                _context4.n = 4;
+                break;
+              }
+              _context4.n = 2;
+              return res.json();
+            case 2:
+              data = _context4.v;
+              designs = Array.isArray(data.designs) ? data.designs : [];
+              files = designs.flatMap(function (item) {
+                return Array.isArray(item.thumbs) ? item.thumbs : [];
+              });
+              map = designs.reduce(function (acc, item) {
+                if (item && item.id && Array.isArray(item.thumbs)) {
+                  acc[item.id] = item.thumbs;
+                }
+                return acc;
+              }, {});
+              if (!cancelled) {
+                setLocalThumbFiles(Array.from(new Set(files)).sort(function (a, b) {
+                  return a.localeCompare(b, 'zh-Hant');
+                }));
+                setLocalThumbMap(map);
+              }
+              _context4.n = 5;
+              break;
+            case 3:
+              _context4.p = 3;
+              _context4.v;
+              if (!cancelled) {
+                setLocalThumbFiles([]);
+                setLocalThumbMap({});
+              }
+            case 4:
+              return _context4.a(2);
+            case 5:
+              return _context4.a(2);
+          }
+        }, _callee4, null, [[0, 3]]);
+      }));
+      function loadLocalThumbs() {
+        return _loadLocalThumbs.apply(this, arguments);
+      }
+      return loadLocalThumbs;
+    }();
+    loadLocalThumbs();
+    return function () {
+      cancelled = true;
+    };
+  }, [isAuthorized, isCloudFiltered]);
   var handleRefreshCache = function handleRefreshCache() {
     fetchRepoTree(true);
   };
+  useEffect(function () {
+    setVisibleDesignCount(24);
+  }, [isCloudFiltered, validDesigns.length]);
+  useEffect(function () {
+    if (appView !== 'gallery') return;
+    var onScroll = function onScroll() {
+      if (window.innerHeight + window.scrollY < document.body.offsetHeight - 1200) return;
+      setVisibleDesignCount(function (prev) {
+        return Math.min(prev + 24, validDesigns.length);
+      });
+    };
+    window.addEventListener('scroll', onScroll, {
+      passive: true
+    });
+    onScroll();
+    return function () {
+      window.removeEventListener('scroll', onScroll);
+    };
+  }, [appView, validDesigns.length]);
   useEffect(function () {
     if (!isAuthorized || isCloudFiltered || appView === 'gallery' || !selection.design) return;
     var scanLocalFallback = /*#__PURE__*/function () {
@@ -1243,18 +1345,28 @@ var App = function App() {
       className: "text-sm font-black text-slate-500 uppercase tracking-widest border-l-4 border-blue-500 pl-3"
     }, "\u8ACB\u9078\u64C7\u60A8\u8981\u7DE8\u8F2F\u7684\u9020\u578B"), /*#__PURE__*/React.createElement("span", {
       className: "text-xs font-bold text-slate-400 bg-slate-200 px-3 py-1 rounded-full"
-    }, CONFIG.potentialDesigns.length, " \u6B3E\u5F0F")), /*#__PURE__*/React.createElement("div", {
+    }, validDesigns.length, " \u6B3E\u5F0F")), /*#__PURE__*/React.createElement("div", {
       className: "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-6"
-    }, CONFIG.potentialDesigns.map(function (id) {
+    }, validDesigns.slice(0, visibleDesignCount).map(function (id) {
       return /*#__PURE__*/React.createElement(DesignCard, {
         key: id,
         id: id,
         cloudFiles: cloudFiles,
         isCloudFiltered: isCloudFiltered,
-        localDoorFiles: Array.from(localValidFiles.doors),
+        localDoorFiles: localThumbFiles.length > 0 ? localThumbFiles : Array.from(localValidFiles.doors),
+        localThumbMap: localThumbMap,
         onSelect: openEditor
       });
-    }))));
+    }), visibleDesignCount < validDesigns.length && /*#__PURE__*/React.createElement("div", {
+      className: "col-span-full flex justify-center pt-4"
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: function onClick() {
+        return setVisibleDesignCount(function (prev) {
+          return Math.min(prev + 24, validDesigns.length);
+        });
+      },
+      className: "px-5 py-3 bg-white border border-slate-200 rounded-xl text-sm font-black text-slate-600 shadow-sm hover:bg-slate-50 active:scale-95 transition-all"
+    }, "\u8F09\u5165\u66F4\u591A")))));
   }
 
   // =========================================================================

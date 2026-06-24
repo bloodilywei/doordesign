@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from PIL import Image, ImageOps
 
@@ -5,8 +6,10 @@ from PIL import Image, ImageOps
 ROOT = Path(__file__).resolve().parent
 SOURCE_DIR = ROOT / "doors"
 THUMB_DIR = ROOT / "thumbs"
+INDEX_PATH = ROOT / "doors.index.json"
 MAX_SIZE = (360, 720)
 JPEG_QUALITY = 68
+SERIES_KEYS = {"1", "2", "3", "5", "6"}
 
 
 def build_thumbnail(src_path: Path, dst_path: Path) -> bool:
@@ -50,6 +53,61 @@ def build_thumbnail(src_path: Path, dst_path: Path) -> bool:
     return True
 
 
+def infer_design_id(filename: str) -> str | None:
+    stem = Path(filename).stem.lower()
+    for number in range(999, 0, -1):
+        design_id = str(number).zfill(2)
+        if not stem.startswith(design_id.lower()):
+            continue
+
+        remainder = stem[len(design_id):]
+        if not remainder:
+            continue
+
+        next_char = remainder[0]
+        if next_char in {"-", "_", "."} or next_char in SERIES_KEYS or next_char.isalpha():
+            return design_id
+
+    return None
+
+
+def build_design_index() -> dict:
+    grouped: dict[str, list[str]] = {}
+
+    for thumb_path in sorted(THUMB_DIR.iterdir()):
+        if not thumb_path.is_file():
+            continue
+        if thumb_path.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
+            continue
+
+        design_id = infer_design_id(thumb_path.name)
+        if not design_id:
+            continue
+
+        grouped.setdefault(design_id, []).append(thumb_path.name)
+
+    designs = []
+    for design_id, files in sorted(grouped.items(), key=lambda item: int(item[0])):
+        preferred = [
+            f"{design_id}-11.jpg",
+            f"{design_id}11.jpg",
+            f"{design_id}-12.jpg",
+            f"{design_id}12.jpg",
+        ]
+        ordered = [name for name in preferred if name in files]
+        ordered.extend(name for name in files if name not in ordered)
+
+        designs.append({
+            "id": design_id,
+            "thumbs": ordered,
+        })
+
+    return {
+        "generatedAt": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+        "designs": designs,
+    }
+
+
 def main() -> None:
     THUMB_DIR.mkdir(parents=True, exist_ok=True)
     created = 0
@@ -67,8 +125,15 @@ def main() -> None:
         else:
             skipped += 1
 
+    index_data = build_design_index()
+    INDEX_PATH.write_text(
+        json.dumps(index_data, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+    )
+
     print(f"created={created}")
     print(f"skipped={skipped}")
+    print(f"indexed={len(index_data['designs'])}")
 
 
 if __name__ == "__main__":
