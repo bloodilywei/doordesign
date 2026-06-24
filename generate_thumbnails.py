@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 from PIL import Image, ImageOps
 
@@ -7,9 +8,12 @@ ROOT = Path(__file__).resolve().parent
 SOURCE_DIR = ROOT / "doors"
 THUMB_DIR = ROOT / "thumbs"
 INDEX_PATH = ROOT / "doors.index.json"
+INVALID_REPORT_PATH = ROOT / "doors.invalid.txt"
 MAX_SIZE = (360, 720)
 JPEG_QUALITY = 68
-SERIES_KEYS = {"1", "2", "3", "5", "6"}
+STANDARD_FILENAME_RE = re.compile(r"^(?P<design>\d{2,3})-(?P<material>\d{2})(?:-(?P<variant>\d{2}))?$")
+DESIGN_PREFIX_RE = re.compile(r"^(?P<design>\d{2,3})-(?P<material>\d{2})(?P<rest>.*)$")
+TEXT_EFFECT_RE = re.compile(r"^(?P<variant>[A-Za-z0-9]{1,2})?(?:[\-_]?)?(?:\((?P<label>[^)]+)\)|(?P<bare_label>[\u4e00-\u9fff]+.*))$")
 
 
 def build_thumbnail(src_path: Path, dst_path: Path) -> bool:
@@ -53,26 +57,46 @@ def build_thumbnail(src_path: Path, dst_path: Path) -> bool:
     return True
 
 
-def infer_design_id(filename: str) -> str | None:
-    stem = Path(filename).stem.lower()
-    for number in range(999, 0, -1):
-        design_id = str(number).zfill(2)
-        if not stem.startswith(design_id.lower()):
-            continue
+def parse_design_file(filename: str) -> dict | None:
+    stem = Path(filename).stem
+    match = DESIGN_PREFIX_RE.match(stem)
+    if not match:
+        return None
 
-        remainder = stem[len(design_id):]
-        if not remainder:
-            continue
+    rest = (match.group("rest") or "").strip()
+    rest = rest.lstrip("-_")
+    variant = ""
+    effect = ""
+    naming_mode = "base"
 
-        next_char = remainder[0]
-        if next_char in {"-", "_", "."} or next_char in SERIES_KEYS or next_char.isalpha():
-            return design_id
+    if rest:
+        variant_match = re.match(r"^(?P<variant>[A-Za-z0-9]{1,2})", rest)
+        if variant_match:
+            variant = variant_match.group("variant")
+            naming_mode = "variant"
 
-    return None
+        text_effect_match = TEXT_EFFECT_RE.match(rest)
+        if text_effect_match:
+            effect = (text_effect_match.group("label") or text_effect_match.group("bare_label") or "").strip()
+            if effect:
+                naming_mode = "effect" if not variant else "variant-effect"
+        elif rest and not variant:
+            effect = rest
+            naming_mode = "effect"
+
+    return {
+        "id": match.group("design"),
+        "material": match.group("material"),
+        "variant": variant,
+        "effect": effect,
+        "naming_mode": naming_mode,
+        "is_standard": bool(STANDARD_FILENAME_RE.match(stem)) or bool(effect),
+        "file": filename,
+    }
 
 
 def build_design_index() -> dict:
-    grouped: dict[str, list[str]] = {}
+    grouped: dict[str, list[dict]] = {}
 
     for thumb_path in sorted(THUMB_DIR.iterdir()):
         if not thumb_path.is_file():
@@ -80,26 +104,42 @@ def build_design_index() -> dict:
         if thumb_path.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
             continue
 
-        design_id = infer_design_id(thumb_path.name)
-        if not design_id:
+        parsed = parse_design_file(thumb_path.name)
+        if not parsed:
             continue
 
-        grouped.setdefault(design_id, []).append(thumb_path.name)
+        grouped.setdefault(parsed["id"], []).append(parsed)
 
     designs = []
-    for design_id, files in sorted(grouped.items(), key=lambda item: int(item[0])):
-        preferred = [
-            f"{design_id}-11.jpg",
-            f"{design_id}11.jpg",
-            f"{design_id}-12.jpg",
-            f"{design_id}12.jpg",
-        ]
-        ordered = [name for name in preferred if name in files]
-        ordered.extend(name for name in files if name not in ordered)
+    for design_id, items in sorted(grouped.items(), key=lambda item: int(item[0])):
+        ordered_items = sorted(
+            items,
+            key=lambda item: (
+                not item["is_standard"],
+                item["variant"] != "",
+                item["effect"] != "",
+                item["material"] != "11",
+                item["material"],
+                item["variant"],
+                item["effect"],
+                item["file"],
+            ),
+        )
 
         designs.append({
             "id": design_id,
-            "thumbs": ordered,
+            "thumbs": [item["file"] for item in ordered_items],
+            "items": [
+                {
+                    "file": item["file"],
+                    "material": item["material"],
+                    "variant": item["variant"],
+                    "effect": item["effect"],
+                    "namingMode": item["naming_mode"],
+                    "isStandard": item["is_standard"],
+                }
+                for item in ordered_items
+            ],
         })
 
     return {
@@ -112,12 +152,20 @@ def main() -> None:
     THUMB_DIR.mkdir(parents=True, exist_ok=True)
     created = 0
     skipped = 0
+    invalid_files: list[str] = []
+    effect_files: list[str] = []
 
     for src_path in sorted(SOURCE_DIR.iterdir()):
         if not src_path.is_file():
             continue
         if src_path.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
             continue
+
+        parsed = parse_design_file(src_path.name)
+        if not parsed:
+            invalid_files.append(src_path.name)
+        elif parsed["effect"]:
+            effect_files.append(src_path.name)
 
         dst_path = THUMB_DIR / src_path.name
         if build_thumbnail(src_path, dst_path):
@@ -130,10 +178,20 @@ def main() -> None:
         json.dumps(index_data, ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8",
     )
+    report_lines = [
+        "[effects]",
+        *effect_files,
+        "",
+        "[invalid]",
+        *invalid_files,
+    ]
+    INVALID_REPORT_PATH.write_text("\n".join(report_lines), encoding="utf-8")
 
     print(f"created={created}")
     print(f"skipped={skipped}")
     print(f"indexed={len(index_data['designs'])}")
+    print(f"effects={len(effect_files)}")
+    print(f"invalid={len(invalid_files)}")
 
 
 if __name__ == "__main__":
