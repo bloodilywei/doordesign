@@ -9,12 +9,28 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
-    
-    <script type="module">
-        import { initializeApp, getApps, getApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        window.FB = { initializeApp, getApps, getApp, getAuth, signInAnonymously, getFirestore, collection, getDocs };
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore-compat.js"></script>
+    <script>
+        window.FB = {
+            initializeApp: (config) => firebase.initializeApp(config),
+            getApps: () => firebase.apps,
+            getApp: () => firebase.app(),
+            getAuth: (app) => firebase.auth(app),
+            signInAnonymously: (auth) => auth.signInAnonymously(),
+            getFirestore: (app) => firebase.firestore(app),
+            collection: (db, ...segments) => db.collection(segments.join('/')),
+            getDocs: async (ref) => {
+                const snapshot = await ref.get();
+                return {
+                    docs: snapshot.docs.map((doc) => ({
+                        id: doc.id,
+                        data: () => doc.data()
+                    }))
+                };
+            }
+        };
     </script>
 
     <style>
