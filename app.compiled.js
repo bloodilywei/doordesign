@@ -158,6 +158,38 @@ var CONFIG = {
     return (i + 1).toString().padStart(2, '0');
   })
 };
+var STANDARD_DOOR_WIDTH = 900;
+var STANDARD_DOOR_HEIGHT = 2100;
+var extractAccessorySize = function extractAccessorySize(baseId) {
+  var matches = String(baseId || '').match(/\d+/g);
+  if (!matches || matches.length < 2) return null;
+  var width = Number(matches[matches.length - 2]);
+  var height = Number(matches[matches.length - 1]);
+  if (!width || !height) return null;
+  return {
+    width: width,
+    height: height
+  };
+};
+var getAccessoryScale = function getAccessoryScale(img, door, baseId) {
+  var size = extractAccessorySize(baseId);
+  if (!img || !door || !door.width || !door.height || !size) {
+    return {
+      scaleX: (door === null || door === void 0 ? void 0 : door.scaleX) || 1,
+      scaleY: (door === null || door === void 0 ? void 0 : door.scaleY) || 1,
+      ratioWidth: null,
+      ratioHeight: null
+    };
+  }
+  var doorDisplayWidth = door.getScaledWidth();
+  var doorDisplayHeight = door.getScaledHeight();
+  return {
+    scaleX: doorDisplayWidth * (size.width / STANDARD_DOOR_WIDTH) / img.width,
+    scaleY: doorDisplayHeight * (size.height / STANDARD_DOOR_HEIGHT) / img.height,
+    ratioWidth: size.width / STANDARD_DOOR_WIDTH,
+    ratioHeight: size.height / STANDARD_DOOR_HEIGHT
+  };
+};
 var DesignCard = function DesignCard(_ref) {
   var id = _ref.id,
     cloudFiles = _ref.cloudFiles,
@@ -1106,9 +1138,11 @@ var App = function App() {
           canvas.getObjects().forEach(function (obj) {
             var _obj$id;
             if ((_obj$id = obj.id) !== null && _obj$id !== void 0 && _obj$id.startsWith('acc')) {
+              var ratioWidth = obj.doorRatioWidth;
+              var ratioHeight = obj.doorRatioHeight;
               obj.set({
-                scaleX: newScale,
-                scaleY: newScale
+                scaleX: ratioWidth ? door.getScaledWidth() * ratioWidth / obj.width : newScale,
+                scaleY: ratioHeight ? door.getScaledHeight() * ratioHeight / obj.height : newScale
               });
               obj.setCoords();
             }
@@ -1550,6 +1584,10 @@ var App = function App() {
             case 1:
               accHtmlImg = _context6.v;
               img = new fabric.Image(accHtmlImg);
+              var doorObj = fabricCanvas.getObjects().find(function (obj) {
+                return obj.id === 'door';
+              });
+              var accScale = getAccessoryScale(img, doorObj, acc.id);
               img.set({
                 left: fabricCanvas.getWidth() / 2,
                 top: fabricCanvas.getHeight() / 2,
@@ -1558,8 +1596,10 @@ var App = function App() {
                 id: "acc-".concat(Date.now()),
                 baseId: acc.id,
                 currentColor: "白",
-                scaleX: doorScale,
-                scaleY: doorScale,
+                scaleX: accScale.scaleX,
+                scaleY: accScale.scaleY,
+                doorRatioWidth: accScale.ratioWidth,
+                doorRatioHeight: accScale.ratioHeight,
                 hasControls: false,
                 lockScalingX: true,
                 lockScalingY: true,
@@ -1654,6 +1694,8 @@ var App = function App() {
                 id: selectedAcc.id,
                 baseId: selectedAcc.baseId,
                 currentColor: c.id,
+                doorRatioWidth: selectedAcc.doorRatioWidth || null,
+                doorRatioHeight: selectedAcc.doorRatioHeight || null,
                 hasControls: false,
                 lockScalingX: true,
                 lockScalingY: true,
