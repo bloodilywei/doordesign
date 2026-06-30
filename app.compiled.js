@@ -181,13 +181,22 @@ var getAccessoryScale = function getAccessoryScale(img, door, baseId) {
       ratioHeight: null
     };
   }
+  var sourceWidth = size.width;
+  var sourceHeight = size.height;
+  var imageRatio = img.width / img.height;
+  var directRatio = sourceWidth / sourceHeight;
+  var swappedRatio = sourceHeight / sourceWidth;
+  if (Math.abs(swappedRatio - imageRatio) < Math.abs(directRatio - imageRatio)) {
+    sourceWidth = size.height;
+    sourceHeight = size.width;
+  }
   var doorDisplayWidth = door.getScaledWidth();
   var doorDisplayHeight = door.getScaledHeight();
   return {
-    scaleX: doorDisplayWidth * (size.width / STANDARD_DOOR_WIDTH) / img.width,
-    scaleY: doorDisplayHeight * (size.height / STANDARD_DOOR_HEIGHT) / img.height,
-    ratioWidth: size.width / STANDARD_DOOR_WIDTH,
-    ratioHeight: size.height / STANDARD_DOOR_HEIGHT
+    scaleX: doorDisplayWidth * (sourceWidth / STANDARD_DOOR_WIDTH) / img.width,
+    scaleY: doorDisplayHeight * (sourceHeight / STANDARD_DOOR_HEIGHT) / img.height,
+    ratioWidth: sourceWidth / STANDARD_DOOR_WIDTH,
+    ratioHeight: sourceHeight / STANDARD_DOOR_HEIGHT
   };
 };
 var DesignCard = function DesignCard(_ref) {
@@ -1600,12 +1609,24 @@ var App = function App() {
                 scaleY: accScale.scaleY,
                 doorRatioWidth: accScale.ratioWidth,
                 doorRatioHeight: accScale.ratioHeight,
-                hasControls: false,
+                hasControls: true,
                 lockScalingX: true,
                 lockScalingY: true,
+                lockRotation: false,
                 hasBorders: true,
                 cornerColor: '#3b82f6',
                 transparentCorners: false
+              });
+              img.setControlsVisibility({
+                mt: false,
+                mb: false,
+                ml: false,
+                mr: false,
+                tl: false,
+                tr: false,
+                bl: false,
+                br: false,
+                mtr: true
               });
               fabricCanvas.add(img).setActiveObject(img).requestRenderAll();
               setActiveMenu('acc');
@@ -1696,12 +1717,24 @@ var App = function App() {
                 currentColor: c.id,
                 doorRatioWidth: selectedAcc.doorRatioWidth || null,
                 doorRatioHeight: selectedAcc.doorRatioHeight || null,
-                hasControls: false,
+                hasControls: true,
                 lockScalingX: true,
                 lockScalingY: true,
+                lockRotation: false,
                 hasBorders: true,
                 cornerColor: '#3b82f6',
                 transparentCorners: false
+              });
+              newImg.setControlsVisibility({
+                mt: false,
+                mb: false,
+                ml: false,
+                mr: false,
+                tl: false,
+                tr: false,
+                bl: false,
+                br: false,
+                mtr: true
               });
               fabricCanvas.remove(selectedAcc).add(newImg).setActiveObject(newImg).requestRenderAll();
               setSelectedAcc(newImg);
